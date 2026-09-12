@@ -1,5 +1,28 @@
 # FireControlApp
 
+## 致谢
+
+本项目的完成离不开以下贡献者与开源项目，在此致谢。
+
+**贡献者**
+
+- [@Skywindfox](https://github.com/Skywindfox) —— 项目发起、硬件平台搭建、整体设计与验证
+- [@FBI-0537](https://github.com/FBI-0537) —— 参与开发，验证了 fork 协作链路（[PR #1](https://github.com/Skywindfox/DefFireWork/pull/1)）
+
+**开源项目与技术**
+
+- [Zig](https://ziglang.org/) —— 充当 armhf 交叉编译器，让本机无需 root 即可完成 ARM 构建
+- [X.Org / Xlib / Xft](https://www.x.org/) —— 图形界面与文字渲染的基础
+- [FreeType](https://freetype.org/) / [fontconfig](https://www.freedesktop.org/wiki/Software/fontconfig/) —— TrueType 渲染与字体匹配
+- [文泉驿](http://wenq.org/)（WenQuanYi）—— 板上的中文字体
+- [Noto Sans CJK](https://fonts.google.com/noto) —— 开发机上的中文字体
+- [CMake](https://cmake.org/) / [GitHub](https://github.com/) —— 构建系统与代码托管
+
+**硬件与系统**
+
+- 正点原子 ATK-DLMP135 开发板（STM32MP135）
+- Debian GNU/Linux 12 (bookworm) armv7l
+
 ## 前言
 
 - 本项目旨在完成个人的省级大创项目的目的，本仓库仅作个人存储，不建议对外使用

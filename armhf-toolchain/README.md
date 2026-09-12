@@ -136,9 +136,16 @@ include/lib 路径列表 —— 版本永远和 Debian 仓库一致，不会漂�
 ## ⚠️ 已知限制
 
 - **Windows 上需要 Docker Desktop 处于运行状态**，脚本会检测并给出提示。
-- 本 Dockerfile 在编写时**未能在作者机器上实测** —— 那台机器无法访问
-  `docker.io`（拉不到 `debian:bookworm-slim`）。语法与包名均已核对，
-  但请以第一次 `docker build` 的结果为准。构建期自检会兜住绝大部分问题。
+- 本 Dockerfile 已在 **Windows + Docker Desktop** 上实测通过（2026-09-12）。
+  首次实测修掉了三个会让构建**必然失败**的问题：自检缺 `-I/usr/include/freetype2`、
+  slim 镜像里没有 `file`、`deb.debian.org` 间歇性断连。详见 `Dockerfile` 注释。
+- 默认软件源已换成**清华 TUNA** —— `deb.debian.org` 在部分网络下会"前 10 MB 能下、
+  后面直接连不上"，导致镜像构建随机失败。要用官方源：
+  `docker build --build-arg APT_MIRROR=deb.debian.org -t firecontrol-armhf:bookworm armhf-toolchain/`
+- **Windows 检出注意**：仓库根目录的 `.gitattributes` 已把 `*.sh` / `Dockerfile` 锁成 LF。
+  Git for Windows 默认 `core.autocrlf=true`，会把它们 checkout 成 CRLF，那样的 `.sh`
+  拿到板子或容器里执行会报 `bad interpreter: No such file or directory`。
+  已经用 CRLF 检出的工作区需要重新检出才会变成 LF：`git rm --cached -r . && git reset --hard`。
 - 旧的 `cmake/toolchain-armhf.cmake`（Zig 版，编译**纯逻辑层与控制台程序**）
   **仍然保留** —— 它不需要 X11，用 Zig 编很快，作为轻量路径继续可用。
   只有 **GUI** 必须走本目录的 Docker 环境。

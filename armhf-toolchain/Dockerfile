@@ -24,17 +24,39 @@
 #   ./armhf-toolchain/build-armhf.sh          # Linux / macOS
 #   .\armhf-toolchain\build-armhf.ps1         # Windows (Docker Desktop)
 #
-# ⚠️ 状态说明
-#   本文件在编写时**未能在作者的开发机上实测**（该机无法访问 docker.io 拉取
-#   debian 基础镜像）。语法与包名均已核对，但请以第一次 docker build 的结果为准。
-#   构建结束后镜像内的自检脚本会编译一个含 X11 + freetype 的测试程序，
-#   自检失败会让 build 直接失败 —— 所以"构建成功"本身就意味着工具链可用。
+# 状态
+#   已在 **Windows + Docker Desktop** 上实测通过（2026-09-12，FBI-0537）。
+#   构建结束后镜像内的自检脚本会编译一个含 X11 + freetype 的探针程序并校验
+#   硬浮点 ABI，自检失败会让 build 直接失败 —— 所以"构建成功"就意味着工具链可用。
+#
+#   首次实测修掉了三个会让构建**必然失败**的问题（下面各标注了「实测修复」）:
+#     1. 自检没把 pkg-config 的 -I/usr/include/freetype2 带进去 → ft2build.h 找不到
+#     2. 自检用了 file，而 debian:bookworm-slim 里没有这个包
+#     3. deb.debian.org(Fastly) 会"下到一半断掉" → 默认源换成清华 TUNA
 
 FROM debian:bookworm-slim
 
 # 非交互式 apt，避免构建时卡在配置界面
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
+
+# ---------------------------------------------------------------------------
+# 0) 软件源
+#
+# deb.debian.org (Fastly) 在部分网络下会间歇性连不上, 实测到过:
+#     E: Failed to fetch http://deb.debian.org/debian/pool/.../libx11-dev_...deb
+#        Unable to connect to deb.debian.org:80 [IP: 28.0.0.12 80]
+# 表现是"前 10 MB 能下来, 后面直接断", 镜像构建随机失败。
+# 默认换成清华 TUNA(国内可达性好)。要用官方源:
+#     docker build --build-arg APT_MIRROR=deb.debian.org \
+#                  -t firecontrol-armhf:bookworm armhf-toolchain/
+# ---------------------------------------------------------------------------
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
+RUN set -eux; \
+    if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    grep -E '^URIs:' /etc/apt/sources.list.d/debian.sources
 
 # ---------------------------------------------------------------------------
 # 1) 交叉编译器 + 构建工具
@@ -49,6 +71,7 @@ RUN set -eux; \
         make \
         ninja-build \
         pkg-config \
+        file \
         ca-certificates; \
     rm -rf /var/lib/apt/lists/*
 
@@ -89,7 +112,9 @@ RUN set -eux; \
       '    FT_Library lib; FT_Init_FreeType(&lib);' \
       '    return 0;' \
       '}' > /tmp/probe.c; \
-    arm-linux-gnueabihf-gcc -O2 /tmp/probe.c -o /tmp/probe -lX11 -lfreetype; \
+    pkg-config --libs x11 freetype2 | grep -q 'arm-linux-gnueabihf'; \
+    arm-linux-gnueabihf-gcc -O2 /tmp/probe.c -o /tmp/probe \
+        $(pkg-config --cflags --libs x11 freetype2); \
     file /tmp/probe | grep -q 'ARM' ; \
     arm-linux-gnueabihf-readelf -h /tmp/probe | grep -q 'hard-float ABI'; \
     rm -f /tmp/probe /tmp/probe.c; \

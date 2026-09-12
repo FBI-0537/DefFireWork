@@ -7,7 +7,7 @@
 **贡献者**
 
 - [@Skywindfox](https://github.com/Skywindfox) —— 项目发起、硬件平台搭建、整体设计与验证
-- [@FBI-0537](https://github.com/FBI-0537) —— 参与开发，验证了 fork 协作链路（[PR #1](https://github.com/Skywindfox/DefFireWork/pull/1)）
+- [@FBI-0537](https://github.com/FBI-0537) —— 参与开发
 
 **开源项目与技术**
 

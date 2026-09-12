@@ -107,38 +107,56 @@ if(NOT _gui_attempt)
         message(STATUS "GUI: 已跳过 (WITH_GUI=OFF)")
     endif()
 else()
-    find_package(X11 QUIET)
+    # Xft 是必须的: X11 核心位图字体只有 ISO-8859-1, 画不出汉字。
+    #
+    # 用 pkg-config 而不是 CMake 的 FindX11:
+    #   FindX11 只给出 Xft 自己的头文件路径, 不给它传递依赖的路径
+    #   (freetype2 的 ft2build.h 在 /usr/include/freetype2), 会编译失败。
+    #   pkg-config 的 Requires/Requires.private 链能正确处理这些。
+    find_package(PkgConfig QUIET)
 
-    if(X11_FOUND)
+    if(PkgConfig_FOUND)
+        # 必须显式写 x11: xft.pc 把 x11 放在 Requires.private 里, 而
+        # `pkg-config --libs` 默认不输出私有依赖, 只写 xft 会链接失败报
+        # "DSO missing from command line"。
+        pkg_check_modules(XFT QUIET xft x11)
+    endif()
+
+    if(XFT_FOUND)
         set(HAVE_GUI TRUE)
         add_executable(halloworld-gui
             src/gui.cpp
         )
-        target_link_libraries(halloworld-gui PRIVATE ${X11_LIBRARIES})
-        target_include_directories(halloworld-gui PRIVATE ${X11_INCLUDE_DIR})
+        target_include_directories(halloworld-gui PRIVATE ${XFT_INCLUDE_DIRS})
+        target_compile_options(halloworld-gui PRIVATE ${XFT_CFLAGS_OTHER})
+        target_link_directories(halloworld-gui PRIVATE ${XFT_LIBRARY_DIRS})
+        target_link_libraries(halloworld-gui PRIVATE ${XFT_LIBRARIES})
 
         # 交叉编译时同样要链接期 -s。
         # 本机无法事后 strip ARM (binutils 只编了 x86 BFD 后端), 所以瘦身只能
-        # 在链接时做。不加这一条产物约 100 KB, 加了约 7.5 KB。
+        # 在链接时做。不加这一条产物约 100 KB。
         if(IS_CROSS_BUILD)
             target_link_options(halloworld-gui PRIVATE -s)
         endif()
 
-        message(STATUS "GUI: 使用 X11 ${X11_VERSION} (${X11_X11_LIB})")
+        message(STATUS "GUI: Xft ${XFT_VERSION} (via pkg-config)")
+        message(STATUS "     libs: ${XFT_LIBRARIES}")
+        message(STATUS "     incs: ${XFT_INCLUDE_DIRS}")
     else()
         set(HAVE_GUI FALSE)
+        set(_why "pkg-config 找不到 xft")
         if(IS_CROSS_BUILD)
             message(FATAL_ERROR
-                "交叉编译启用了 GUI (WITH_GUI=ON) 但找不到 X11。\n"
+                "交叉编译启用了 GUI (WITH_GUI=ON) 但${_why}。\n"
                 "需要用带 sysroot 的 toolchain:\n"
                 "    cmake -B build -S . \\\n"
                 "          -DCMAKE_TOOLCHAIN_FILE=\$HOME/Code/armhf-sysroot/toolchain-armhf-x11.cmake\n"
                 "或者直接用: ./build.sh gui-armhf")
         else()
             message(WARNING
-                "找不到 X11 开发文件, 跳过 GUI 目标。\n"
-                "    Fedora:        sudo dnf install libX11-devel\n"
-                "    Debian/Ubuntu: sudo apt install libx11-dev")
+                "找不到 Xft 开发文件, 跳过 GUI 目标。\n"
+                "    Fedora:        sudo dnf install libXft-devel freetype-devel fontconfig-devel\n"
+                "    Debian/Ubuntu: sudo apt install libxft-dev libfreetype-dev libfontconfig-dev")
         endif()
     endif()
 endif()

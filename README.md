@@ -271,11 +271,42 @@ ssh root@<板子IP> 'g++ -std=c++20 -O2 gui.cpp -o halloworld-gui $(pkg-config -
 
 ### 6.4 GUI 交互
 
+窗口布局：
+
+```
+┌──────────────────────────────────────────────┬────────┐
+│                                              │ 【退出】│  ← 右上角
+│                                              └────────┘
+│                                                        │
+│                    halloworld                          │  ← 居中大标题
+│                                                        │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐          │
+│  │ 功能 1 │ │ 功能 2 │ │ 功能 3 │ │ 功能 4 │          │  ← 底部占位
+│  └────────┘ └────────┘ └────────┘ └────────┘          │
+└────────────────────────────────────────────────────────┘
+```
+
 | 操作 | 效果 |
 |---|---|
-| 双击窗口 | 退出（触摸屏上点两下） |
-| 按 `q` / `Esc` | 退出 |
-| 点窗口管理器关闭按钮 | 退出（板子上没有 WM，所以用不上） |
+| 点右上角 **【退出】** | 退出程序 |
+| 点底部 **功能 1~4** | 目前只打印提示（**功能待定**） |
+| 按 `q` / `Esc` | 退出程序 |
+| 点窗口管理器关闭按钮 | 退出（板上没有 WM，板子上用不到，靠【退出】按钮） |
+
+**注意**：**不支持"双击窗口退出"** —— 那是早期行为，已移除。原因见第 10.2 节 #12：
+双击曾导致窗口"启动即关闭"的竞态，而且在触摸屏上容易误触。
+
+按钮在 1024×600 上的实际尺寸（按窗口比例算，换屏幕不用改代码）：
+
+| 按钮 | 位置 (x, y) | 尺寸 |
+|---|---|---|
+| 退出 | (933, 10) | 81×54 |
+| 功能 1 | (10, 536) | 243×54 |
+| 功能 2 | (263, 536) | 243×54 |
+| 功能 3 | (516, 536) | 243×54 |
+| 功能 4 | (769, 536) | 243×54 |
+
+高度 54 px 是按触摸操作设计的（手指触点约 40–50 px），代码里限制在 36–64 px。
 
 ---
 
@@ -360,17 +391,52 @@ add_library(firecontrol
 
 否则会出现"文件明明写了却没被编译"的困惑。
 
-### 9.2 为什么 GUI 用裸 Xlib
+### 9.2 为什么用 Xlib + Xft，而不是 GTK/Qt
 
 X11 是**客户-服务端**模型：应用程序只是 X 客户端，把绘图请求发给 X server。
-所以客户端只需要 `libX11` 和协议头文件，不需要服务端那套。
+所以客户端只需要库和协议头文件，不需要服务端那套。
 
 | 方案 | 产物 | 依赖 | 437 MiB 板子 |
 |---|---|---|---|
-| **裸 Xlib** | 约 8 KB | libX11 + libc | ✅ |
-| XCB | 约 15 KB | libxcb | ⚠️ 需板上装 libxcb-dev |
+| **Xlib + Xft**（本项目） | 约 12 KB | libX11 + libXft + libfontconfig + libfreetype | ✅ |
+| 纯 Xlib（无 Xft） | 约 8 KB | libX11 | ⚠️ **画不出中文** |
 | GTK4 | 数 MB | glib/pango/cairo/… | ❌ 40–80 MiB 起步 |
 | Qt6 | 数十 MB | 一大堆 | ❌ |
+
+**为什么必须带 Xft**：X11 核心位图字体只有 **ISO-8859-1**（Latin-1）编码，
+**没有汉字字形**。用 `XDrawString` 画中文，UTF-8 的多字节会被当成多个 Latin-1
+字符各画一个，结果是乱码（实测显示成 `蚂蚁` 之类）。
+
+Xft 走 **FreeType + fontconfig**，支持完整 Unicode 与 TrueType 反锯齿：
+
+```cpp
+XftFont *f = XftFontOpenName(dpy, scr, "WenQuanYi Zen Hei:size=18");
+XftDrawString32(draw, &color, f, x, y, codepoints, n);
+```
+
+板子上已预装 **文泉驿正黑**（`wqy-zenhei.ttc`，含 Regular / Mono / 点阵三个变体），
+`libXft.so.2` 和 `libfontconfig.so.1` 也都在（X 桌面环境自带）。
+
+**实测验证**（本机 Xwayland + 文泉驿，用字形宽度指标判断真实渲染）：
+
+| 文本 | UTF-8 字节 | 解析后码点 | 像素宽度 |
+|---|---|---|---|
+| `退出` | 6 | **2** ✓ | 48 |
+| `功能 1` | 8 | **4** ✓ | 66 |
+| `halloworld` | 10 | 10 | 113 |
+| `中` | 3 | **1** ✓ | 24 |
+| `A` | 1 | 1 | 14 |
+
+汉字/字母宽度比 = **1.71** —— 汉字是宽字形，证明字形真实存在。
+（若是乱码，2 个汉字会被拆成 6 个拉丁字符，码点数和宽度都会对不上。）
+
+### 9.2.1 Xft 交叉编译的三个坑
+
+| 现象 | 原因 | 解法 |
+|---|---|---|
+| `ft2build.h: file not found` | CMake 的 `FindX11` 只给 Xft 自己的头文件路径，**不给传递依赖**（freetype2 在 `/usr/include/freetype2`） | 改用 `pkg_check_modules(XFT xft x11)`，pkg-config 正确处理 `Requires` 链 |
+| 链接报 `DSO missing from command line` | `xft.pc` 把 `x11` 放在 **`Requires.private`** 里，而 `pkg-config --libs` **默认不输出私有依赖** | 显式写 `pkg_check_modules(XFT QUIET xft x11)` |
+| `--cflags xft` 没有 `-I/usr/include` | pkg-config 认为 `/usr/include` 是默认路径会省略，但交叉编译时 zig 不把 sysroot 的 include 当默认 | toolchain 里显式加 `-isystem $SYSROOT/usr/include` |
 
 ### 9.3 触摸在 X11 里就是普通 Button 事件
 
@@ -405,9 +471,9 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 |---|---|---|
 | 1 | **GUI 产物是动态链接的** | 运行时依赖板子上的 `libX11.so.6`。**已在板上实测通过** —— 板子跑着 Xorg，该库存在，动态链接正常 |
 | 2 | **`halloworld` 拼写** | `hallow` 通常是 `hollow` 的笔误。沿用最初文件名未改 |
-| 3 | **Window 首次映射可能收到杂散事件** | 见 10.2 #12，已缓解（双击退出 + 忽略启动瞬间点击），但根因（X server/WM 行为）不在本项目控制内 |
+| 3 | **Window 首次映射可能收到杂散事件** | 见 10.2 #12。已缓解：忽略映射后 400 ms 内的点击，且退出改为点按钮（不再是单击/双击全屏）。根因（X server/WM 行为）不在本项目控制内 |
 | 4 | **armhf 的 GUI 无法在开发机运行** | 架构不同 + 需要板子的 libX11。必须 scp 到板子 |
-| 5 | **X11 中文显示依赖服务端字体** | `XDrawString` 用位图字体，中文可能显示为方块。要可靠显示中文需上 Xft + FreeType + fontconfig，依赖会变多。当前只画 ASCII |
+| 5 | ~~X11 中文显示~~ **已解决** | 原方案用 X11 核心位图字体（只有 ISO-8859-1，画不出汉字，中文显示为乱码）。**已改用 Xft + FreeType + fontconfig**，中文正常。见第 9.2 节 |
 | 6 | **CMake 不自动扫描源文件** | 新增 `.cpp` 必须手动加到 `CMakeLists.txt`，见 9.1 |
 | 7 | **`build.sh run` 不开窗口** | 它跑的是控制台程序。看窗口用 `build.sh gui` |
 | 8 | **armhf 首次编译慢** | Zig 要从源码构建 libc++，首次约 65 秒。之后走缓存几秒 |
@@ -434,7 +500,7 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 | 9 | `X11/Xlib.h: file not found` | **Zig 一个 X11 头文件都不带**（X11 是外部库，不是内核 UAPI） | 建 ARM sysroot，见第 4 节 |
 | 10 | CMake 报 `Could NOT find X11 (missing: X11_X11_LIB)` | `find_library` 只找 `/usr/lib`，而 ARM 库在 `/usr/lib/arm-linux-gnueabihf/`。**只设 `CMAKE_FIND_ROOT_PATH` 不够** —— 它只给已知搜索路径加前缀，不会自己猜出 Debian 的三元组目录 | toolchain 里显式加 `CMAKE_LIBRARY_PATH` / `CMAKE_INCLUDE_PATH` |
 | 11 | pkg-config 的 `-I` 输出为空 | `/usr/include` 是默认路径，pkg-config 会省略 | toolchain 里用 `-isystem` 显式补。另外 **Fedora 的 pkg-config 没有 Debian 的 `PKG_CONFIG_SYSROOT_DIR` 前缀机制**，要自己写包装脚本 |
-| 12 | **窗口有约 1/3 概率自动关闭** | 窗口刚映射时收到启动瞬间遗留的**杂散 `ButtonPress`**；原本"点一下退出"就被它关掉。间歇性的，很难查 | 忽略映射后 400 ms 内的点击 + 改成**双击退出**。实测 6/6 稳定 |
+| 12 | **窗口有约 1/3 概率自动关闭** | 窗口刚映射时收到启动瞬间遗留的**杂散 `ButtonPress`**；当时"点一下退出"就被它关掉。间歇性的，很难查 | 忽略映射后 400 ms 内的点击。后来退出改为**点右上角按钮**，点击不再有退出语义，风险进一步降低 |
 
 #### 环境 / 工具相关
 
@@ -497,7 +563,7 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 
 ### ⚠️ 仍未验证的部分
 
-- **触摸屏的实际事件**：双击退出、坐标对齐，都还没在板上试过
+- **触摸屏的实际事件**：点【退出】按钮能否退出、按钮命中区域是否准确、坐标是否对齐，都还没在板上试过
 - **窗口模式**（`--windowed`）在板上无 WM 环境下的表现
 - 长时间运行的稳定性
 - 实际触摸坐标范围与 1024×600 是否匹配
@@ -507,10 +573,10 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 ## 12. 待办
 
 - [x] ~~在板子上实测 `halloworld-gui`~~ —— **已完成，全屏窗口正常显示**
-- [ ] 板上实测触摸：双击能否退出，坐标是否对齐
+- [ ] 板上实测触摸：点【退出】按钮、点占位按钮的命中区域是否准确，坐标是否偏移
 - [ ] 确认全屏下 34 号字的观感是否合适（偏大偏小都可调）
 - [ ] 若坐标偏移，写 `Coordinate Transformation Matrix` 校准
 - [ ] 决定是否需要一个极简窗口管理器（`matchbox-window-manager`、`openbox`），
       否则所有程序都只能全屏
-- [ ] 若需中文显示，评估引入 Xft + FreeType 的代价
+- [x] ~~引入 Xft + FreeType 让中文正常显示~~ —— **已完成**，板上实测字体加载成功
 - [ ] 给 `src/` 加自动源文件扫描（`file(GLOB ...)`），免得每次加文件都要改 CMakeLists

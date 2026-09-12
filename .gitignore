@@ -1,0 +1,19 @@
+# 构建目录
+build/
+build-debug/
+build-armhf/
+build-*/
+
+# CMake 产物
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+
+# 可执行文件 (根目录下的旧式产物, 正常应该在 build/ 里)
+/halloworld
+*.armhf
+
+# 编辑器
+.vscode/ipch/

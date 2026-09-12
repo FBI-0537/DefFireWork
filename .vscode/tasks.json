@@ -1,0 +1,194 @@
+{
+    // tasks.json — CMake 工作流
+    // 默认任务 (Ctrl+Shift+B) 会先配置再构建, 成功后自动关闭终端。
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake: 构建 (原生 x86-64)",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && cmake --build build -j $(nproc)"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "close": true
+            },
+            "detail": "配置 + 构建原生 x86-64。产物在 build/halloworld。这是默认任务 (Ctrl+Shift+B)。"
+        },
+        {
+            "label": "CMake: 构建并运行",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && cmake --build build -j $(nproc) && echo '-------- 运行 --------' && ./build/halloworld"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "focus": true
+            },
+            "detail": "构建后立即运行, 输出留在终端里。"
+        },
+        {
+            "label": "CMake: 跑单元测试 (ctest)",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "cmake --build build -j $(nproc) && ctest --test-dir build --output-on-failure"
+            ],
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "focus": true
+            },
+            "detail": "构建并运行 ctest 单元测试。"
+        },
+        {
+            "label": "CMake: 调试版构建 (含符号)",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "cmake -B build-debug -S . -DCMAKE_BUILD_TYPE=Debug && cmake --build build-debug -j $(nproc)"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "close": true
+            },
+            "detail": "Debug 构建 (-g -O0), 产物在 build-debug/halloworld, 配合 gdb 调试。"
+        },
+        {
+            "label": "CMake: 构建 armhf",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "cmake -B build-armhf -S . -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armhf.cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && cmake --build build-armhf -j $(nproc)"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "close": true
+            },
+            "detail": "交叉编译到 armhf (musl 静态链接, 零依赖)。产物在 build-armhf/halloworld, 拷到板子上直接跑。首次编译较慢 (Zig 要从源码构建 libc++)。注意: 这个不含 GUI。"
+        },
+        {
+            "label": "CMake: 构建 GUI 并运行 (原生预览)",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && cmake --build build -j $(nproc) --target halloworld-gui && echo '-------- 运行 (窗口模式, 1024x600) --------' && ./build/halloworld-gui --windowed"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "focus": true
+            },
+            "detail": "在本机 (x86-64) 编译并运行 GUI, 1024x600 窗口。用来快速调布局和字体, 不用上板。"
+        },
+        {
+            "label": "CMake: 构建 GUI armhf (交叉编译)",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "./build.sh gui-armhf"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "focus": true
+            },
+            "detail": "交叉编译 X11 GUI 到 armhf。需要 ~/Code/armhf-sysroot。产物 build-gui-armhf/halloworld-gui 不能在开发机运行, 要 scp 到板子。"
+        },
+        {
+            "label": "CMake: 查看 armhf 产物架构",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "f=build-armhf/halloworld; if [ -f \"$f\" ]; then file \"$f\"; ${env:HOME}/.local/bin/arm-linux-gnueabihf-readelf -h \"$f\" | grep -E 'Class:|Machine:|Flags:'; echo \"体积: $(stat -c %s \"$f\") 字节\"; else echo '找不到 $f, 先跑 armhf 构建'; fi"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "detail": "确认 armhf 产物是 32 位 ARM 且带 hard-float ABI。"
+        },
+        {
+            "label": "CMake: 重新配置 (清理缓存)",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "rm -rf build/CMakeCache.txt build/CMakeFiles && cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && echo '✓ 已重新配置'"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "close": true
+            },
+            "detail": "改了 CMakeLists.txt 后行为异常时用这个清掉缓存重配。"
+        },
+        {
+            "label": "CMake: 清理构建目录",
+            "type": "shell",
+            "command": "rm",
+            "args": [
+                "-rf",
+                "build",
+                "build-debug",
+                "build-armhf"
+            ],
+            "problemMatcher": [],
+            "detail": "删除全部构建目录 (build / build-debug / build-armhf)。"
+        }
+    ]
+}

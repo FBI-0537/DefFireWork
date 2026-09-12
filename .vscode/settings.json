@@ -1,0 +1,15 @@
+{
+    // settings.json — 工作区设置
+    "files.associations": {
+        "*.h": "cpp"
+    },
+
+    // 本项目用 tasks.json 驱动 CMake, 不用 CMake Tools 扩展,
+    // 所以关掉它的自动配置, 免得两套流程互相打架。
+    "cmake.configureOnOpen": false,
+
+    // 注意: 刻意不在这里 exclude build 目录。
+    // compile_commands.json 位于 build/ 下, 是 IntelliSense 的数据源,
+    // 如果把 build 从文件树排除, C/C++ 扩展可能读不到它。
+    // 构建目录的杂乱用 .gitignore 处理更合适, 不影响编辑器功能。
+}

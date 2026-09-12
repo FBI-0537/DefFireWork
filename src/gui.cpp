@@ -1,37 +1,45 @@
-// gui.cpp — FireControlApp 主窗口 (X11 + Xft)
+// gui.cpp — FireControlApp 主界面 (LVGL v9 + X11 后端)
 //
-// 目标平台: 正点原子 ATK-DLMP135 (STM32MP135) + Debian 12 + 精简 X server
+// 目标平台: 正点原子 ATK-DLMP135 (STM32MP135) + Debian 12 + Xorg :0
 //           屏幕 1024x600, 无窗口管理器, 电容触摸屏
 //
-// 为什么用 Xft 而不是 X11 核心字体:
-//   X11 核心位图字体只有 ISO-8859-1 (Latin-1) 编码, 画不出汉字 —— 中文会变成
-//   一串乱码字符。Xft 走 FreeType + fontconfig, 完整 Unicode 支持, 中文正常。
-//   代价是运行时需要 libXft / libfontconfig / libfreetype 和一套中文字体
-//   (板上用文泉驿正黑 wqy-zenhei)。
+// 为什么用 LVGL 的 X11 后端, 而不是它更"嵌入式"的 framebuffer 后端:
+//   板上跑着 Xorg, /dev/fb0 归 X server 管 —— 直接写 framebuffer 会和 Xorg 抢
+//   同一块屏。X11 后端把绘制请求交给 X server, 部署方式一行都不用改; 触摸在
+//   X11 里就是普通的鼠标事件, 键盘/滚轮也一并有驱动 (见 drivers/x11/)。
+//   将来如果决定去掉 Xorg, 把这里的显示初始化换成 lv_linux_fbdev + lv_evdev
+//   即可, 界面代码不用动。
 //
-// 为什么不用 GTK/Qt:
-//   依赖太重。板子总共 437 MiB 内存, GTK4 空程序就要 40-80 MiB。Xlib+Xft 只有
-//   几 MiB。板上没有窗口管理器, 所以默认全屏, 自己 XMoveResizeWindow 占满屏幕。
+// 中文怎么显示:
+//   LVGL 开 FreeType, 运行时从板上的字体文件 (文泉驿正黑 wqy-zenhei.ttc) 取字形。
+//   好处是改文案不用重新生成字库, 界面里出现任何汉字都能显示。板上本来就有
+//   libfreetype (Xft 也在用), 没有引入新的运行时依赖。
 //
-// ⚠️ X11/Xft 是外部库, 交叉编译需要 ARM sysroot (见 README 第 4 节)。
+// 本文件的历史与分工:
+//   第一版由 Skywindfox 写: 裸 Xlib + Xft, 自己画矩形、自己算命中区域。
+//   为什么用 Xft —— X11 核心位图字体只有 ISO-8859-1 编码, 画不出汉字, 中文会变
+//   乱码; Xft 走 FreeType + fontconfig 才有完整 Unicode。
+//   为什么不用 GTK/Qt —— 板子只有 437 MiB 内存, 它们空程序起步就是几十 MiB。
+//   那一版的两个排查结论也都留在下面的实现里: 忽略窗口映射瞬间的杂散点击
+//   (见 kIgnoreClicksMs), 以及字体必须确认真的含汉字字形。
+//   当前这一版由 FBI-0537 重构到 LVGL —— 界面结构、字体加载、事件分发都换成
+//   LVGL 那一套; "不用 GTK/Qt"这条理由对 LVGL 同样成立 (见 README 第 5 节)。
 //
-// 编译 (注意: 注释行不能以反斜杠结尾, 会把下一行也吞进注释并触发 -Wcomment):
-//     g++ -std=c++20 -Wall -Wextra -O2 gui.cpp -o halloworld-gui $(pkg-config --cflags --libs xft x11)
-//
+// 编译: 见 CMakeLists.txt, 目标 halloworld-gui
 // 运行:
-//     ./halloworld-gui              全屏 (板上用这个)
-//     ./halloworld-gui --windowed   窗口模式 (开发机预览用)
+//     ./halloworld-gui                 全屏 —— 板上用这个 (没有窗口管理器)
+//     ./halloworld-gui --windowed      1024x600 窗口 —— 开发机预览用
+//     ./halloworld-gui --font=<文件>   指定字体文件 (默认按候选表自动找)
+
+#include <lvgl.h>
 
 #include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <X11/Xft/Xft.h>
-#include <X11/keysym.h>
 
 #include <clocale>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
+#include <unistd.h>
 
 namespace {
 
@@ -42,252 +50,278 @@ constexpr const char *kText = "halloworld";
 constexpr int kBoardWidth = 1024;
 constexpr int kBoardHeight = 600;
 
+// 字号 (像素)
+constexpr uint32_t kBigFontPx = 40;
+constexpr uint32_t kSmallFontPx = 18;
+
+// 启动后这段时间内的点击一律忽略。窗口刚映射时可能收到启动瞬间遗留的
+// 杂散 ButtonPress, 不挡一下会"一启动就触发某个按钮"。
+constexpr uint32_t kIgnoreClicksMs = 400;
+
+// 主循环最长休眠时间, 防止 LVGL 给出的间隔异常时睡死。
+constexpr uint32_t kMaxSleepMs = 10;
+
 // 单位换算: 布局按相对比例算, 换屏幕尺寸不用改代码。
 constexpr int pct(int total, int percent) { return total * percent / 100; }
 
 // ---------------------------------------------------------------------------
-// 按钮
+// 字体
 //
-// 裸 Xlib 没有控件概念, 按钮就是"画个矩形 + 画个标签 + 自己做命中检测"。
-// 这个结构让"有哪些按钮"变成数据而不是代码 —— 加按钮只改下面的 kButtonLabels。
+// 按"文件路径"找字体, 而不是像 Xft 那样按 fontconfig 字体名 —— 名字查找会
+// 被 fontconfig 静默替换成别的字体, 拿到一个不含汉字的字体也察觉不到。
+// 给一串候选路径, 取第一个能打开的。
+//
+// 板子上一共就这么几个可能的位置 (前两个是 Debian 官方包 fonts-wqy-zenhei 的
+// 安装路径), 最后一个是 DejaVu —— 不含汉字, 只是保证程序还能跑起来。
 // ---------------------------------------------------------------------------
-struct Button {
-    const char *label;   // UTF-8 显示文字
-    int x, y, w, h;      // 布局算出来的位置尺寸
-    bool active;         // true = 已实现; false = 占位
+const char *kFontCandidates[] = {
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/arphic/uming.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+};
+
+bool fileReadable(const char *path)
+{
+    return access(path, R_OK) == 0;
+}
+
+const char *pickFontFile(const char *override_path)
+{
+    if (override_path != nullptr && *override_path != '\0') {
+        if (fileReadable(override_path)) {
+            return override_path;
+        }
+        std::fprintf(stderr, "警告: 指定的字体打不开, 改用自动查找: %s\n", override_path);
+    }
+    for (const char *path : kFontCandidates) {
+        if (fileReadable(path)) {
+            return path;
+        }
+    }
+    std::fprintf(stderr,
+                 "警告: 找不到中文字体, 界面上的汉字会显示成方框。\n"
+                 "      板上装一个: sudo apt install fonts-wqy-zenhei\n"
+                 "      或指定文件: ./halloworld-gui --font=/path/to/font.ttc\n");
+    return nullptr;
+}
+
+lv_font_t *createFont(const char *file, uint32_t px, const char *what)
+{
+    lv_font_t *font = lv_freetype_font_create(file,
+                                              LV_FREETYPE_FONT_RENDER_MODE_BITMAP,
+                                              px, LV_FREETYPE_FONT_STYLE_NORMAL);
+    if (font == nullptr) {
+        std::fprintf(stderr, "警告: 加载字体失败 (%s): %s\n", what, file);
+        return nullptr;
+    }
+    std::printf("  字体(%-8s): %s  [%u px]\n", what, file, px);
+    return font;
+}
+
+// ---------------------------------------------------------------------------
+// 按钮清单
+//
+// "有哪些按钮"是数据不是代码 —— 加按钮只改下面这张表, 布局按数量自动算。
+// ---------------------------------------------------------------------------
+struct ButtonSpec {
+    const char *label;  // UTF-8 显示文字
+    bool active;        // true = 已实现; false = 占位
 };
 
 constexpr int kNumPlaceholders = 4;
 constexpr int kNumButtons = 1 + kNumPlaceholders;
 
-// 按钮清单: [0] 是右上角退出, 其余是底部占位。
-// 以后加/改按钮只动这个数组 —— 布局由 layoutButtons() 按数量自动算。
-constexpr const char *kButtonLabels[kNumButtons] = {
-    "退出",
-    "功能 1", "功能 2", "功能 3", "功能 4",
+// [0] 是右上角退出, 其余是底部占位。
+constexpr ButtonSpec kButtons[kNumButtons] = {
+    {"退出", true},
+    {"功能 1", false}, {"功能 2", false}, {"功能 3", false}, {"功能 4", false},
 };
-constexpr bool kButtonActive[kNumButtons] = {
-    true,
-    false, false, false, false,
-};
-
-Button g_buttons[kNumButtons];
-
-// 按窗口尺寸重新计算所有按钮的位置。窗口大小变化时也要重算。
-void layoutButtons(int win_w, int win_h)
-{
-    for (int i = 0; i < kNumButtons; i++) {
-        g_buttons[i].label = kButtonLabels[i];
-        g_buttons[i].active = kButtonActive[i];
-    }
-
-    // --- 右上角退出按钮 ---
-    // 触摸屏: 按钮不能太小, 否则手指点不准。取屏高的 9%, 限制在 36..64 像素。
-    int bh = win_h * 9 / 100;
-    if (bh < 36) bh = 36;
-    if (bh > 64) bh = 64;
-
-    const int margin = pct(win_w, 1);
-    const int bw = pct(win_w, 8);
-
-    g_buttons[0].w = bw;
-    g_buttons[0].h = bh;
-    g_buttons[0].x = win_w - bw - margin;
-    g_buttons[0].y = margin;
-
-    // --- 底部占位按钮: 横向均分 ---
-    const int gap = pct(win_w, 1);
-    const int total_gap = gap * (kNumPlaceholders + 1);
-    const int pw = (win_w - total_gap) / kNumPlaceholders;
-    const int py = win_h - bh - margin;
-
-    for (int i = 0; i < kNumPlaceholders; i++) {
-        g_buttons[1 + i].w = pw;
-        g_buttons[1 + i].h = bh;
-        g_buttons[1 + i].x = gap + i * (pw + gap);
-        g_buttons[1 + i].y = py;
-    }
-}
-
-bool hitTest(const Button &b, int x, int y)
-{
-    return x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
-}
-
-// 单调时钟秒数。用于"映射后忽略窗口期"的竞态防护。
-double now_sec()
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
-}
 
 // ---------------------------------------------------------------------------
-// Xft 字体
-//
-// 和核心字体的区别: 按"字体名"加载 (fontconfig 负责找文件), 支持任意 Unicode。
-// 给一个候选列表, 取第一个能打开的 —— 不同系统装的中文字体不一样。
+// 全局状态
 // ---------------------------------------------------------------------------
-const char *kBigFontNames[] = {
-    "WenQuanYi Zen Hei:size=40",      // 板上装的文泉驿正黑
-    "Noto Sans CJK SC:size=40",
-    "DejaVu Sans:size=40",
-    "sans:size=40",
-};
-const char *kSmallFontNames[] = {
-    "WenQuanYi Zen Hei:size=18",
-    "Noto Sans CJK SC:size=18",
-    "DejaVu Sans:size=18",
-    "sans:size=18",
-};
+lv_display_t *g_disp = nullptr;
+lv_font_t *g_font_big = nullptr;
+lv_font_t *g_font_small = nullptr;
 
-// UTF-8 -> Unicode 码点。返回写入的码点数, 0 表示空串。
-//
-// 需要自己解 UTF-8 的原因: XftDrawString32 收的是 FcChar32 数组, 而
-// XftDrawStringUtf8 在部分 Xft 版本上处理多字节有兼容问题 —— 自己解最稳。
-int utf8ToCodepoints(const char *s, FcChar32 *out, int max_out)
-{
-    int n = 0;
-    const unsigned char *p = reinterpret_cast<const unsigned char *>(s);
-    while (*p != 0 && n < max_out) {
-        FcChar32 cp = 0;
-        int extra = 0;
-        if (*p < 0x80) {
-            cp = *p;
-        } else if ((*p & 0xE0) == 0xC0) {
-            cp = *p & 0x1F; extra = 1;
-        } else if ((*p & 0xF0) == 0xE0) {
-            cp = *p & 0x0F; extra = 2;
-        } else if ((*p & 0xF8) == 0xF0) {
-            cp = *p & 0x07; extra = 3;
-        } else {
-            p++;              // 非法字节, 跳过
-            continue;
-        }
-        p++;
-        for (int i = 0; i < extra && (*p & 0xC0) == 0x80; i++, p++) {
-            cp = (cp << 6) | (*p & 0x3F);
-        }
-        out[n++] = cp;
-    }
-    return n;
-}
+uint32_t g_start_tick = 0;
+bool g_quit = false;
 
-// 检查字体是否覆盖了文本里用到的所有字符。
-//
-// 为什么需要这个: XftFontOpenName 对**不存在的字体名不会返回 NULL** ——
-// fontconfig 会做替换(substitution), 返回一个替补字体。如果替补字体没有汉字
-// 字形, 中文就会画成方框(tofu), 而程序完全不知道自己拿到的是错字体。
-// 所以必须自己验证覆盖率, 不合格就试下一个候选。
-bool fontCoversText(Display *dpy, XftFont *font, const char *utf8)
+bool inStartupGrace()
 {
-    FcChar32 cps[256];
-    const int n = utf8ToCodepoints(utf8, cps, 256);
-    for (int i = 0; i < n; i++) {
-        if (!XftCharExists(dpy, font, cps[i])) {
-            return false;
-        }
+    const uint32_t elapsed = lv_tick_get() - g_start_tick;
+    if (elapsed >= kIgnoreClicksMs) {
+        return false;
     }
+    std::printf("忽略启动瞬间的点击 (启动后 %u ms)\n", elapsed);
+    std::fflush(stdout);
     return true;
 }
 
-// 所有按钮文字里用到的字符 + 主标题, 作为"字体必须覆盖"的样例。
-// 新增按钮文字时这里也要跟着加, 否则可能选到不含新字符的字体。
-constexpr const char *kFontCoverageSample = "退出功能 1234halloworld";
-
-XftFont *loadXftFont(Display *dpy, int scr, const char **names, int count, const char *what)
+// ---------------------------------------------------------------------------
+// 事件回调
+// ---------------------------------------------------------------------------
+void onClickQuit(lv_event_t *e)
 {
-    for (int i = 0; i < count; i++) {
-        XftFont *f = XftFontOpenName(dpy, scr, names[i]);
-        if (f == nullptr) {
-            continue;       // 真的打不开
-        }
-        if (fontCoversText(dpy, f, kFontCoverageSample)) {
-            std::printf("  字体(%s): %s  [已校验字形覆盖]\n", what, names[i]);
-            return f;
-        }
-        // 能打开但缺字形 —— 大概是被替换成了不含汉字的字体, 换下一个
-        std::printf("  字体(%s): %s  [缺字形, 跳过]\n", what, names[i]);
-        XftFontClose(dpy, f);
-    }
-    std::fprintf(stderr,
-                 "警告: 找不到能显示全部字符的字体 (%s)。\n"
-                 "      中文可能显示为方框。请安装中文字体, 例如:\n"
-                 "        Fedora:  sudo dnf install google-noto-sans-cjk-fonts\n"
-                 "        Debian:  sudo apt install fonts-wqy-zenhei\n", what);
-    return nullptr;
-}
-
-// 测量 UTF-8 串的像素宽度
-int textWidthUtf8(Display *dpy, XftFont *font, const char *s)
-{
-    FcChar32 cps[256];
-    const int n = utf8ToCodepoints(s, cps, 256);
-    if (n == 0) {
-        return 0;
-    }
-    XGlyphInfo ext;
-    XftTextExtents32(dpy, font, cps, n, &ext);
-    return static_cast<int>(ext.xOff);
-}
-
-// 在指定基线上居中画一行 UTF-8 文字
-void drawTextCentered(Display *dpy, XftDraw *draw, XftFont *font, XftColor *color,
-                      int center_x, int baseline, const char *s)
-{
-    if (font == nullptr || s == nullptr) {
+    LV_UNUSED(e);
+    if (inStartupGrace()) {
         return;
     }
-    FcChar32 cps[256];
-    const int n = utf8ToCodepoints(s, cps, 256);
-    if (n == 0) {
+    std::printf("点击【退出】按钮, 退出\n");
+    std::fflush(stdout);
+    g_quit = true;
+}
+
+void onClickPlaceholder(lv_event_t *e)
+{
+    if (inStartupGrace()) {
         return;
     }
-    const int w = textWidthUtf8(dpy, font, s);
-    XftDrawString32(draw, color, font, center_x - w / 2, baseline, cps, n);
+    const auto *label = static_cast<const char *>(lv_event_get_user_data(e));
+
+    // 打印坐标便于板上核对触摸是否偏移 (板上待办之一)
+    lv_point_t p{0, 0};
+    lv_indev_t *indev = lv_indev_active();
+    if (indev != nullptr) {
+        lv_indev_get_point(indev, &p);
+    }
+    std::printf("点击【%s】(占位, 功能待定) 坐标 (%d,%d)\n", label,
+                static_cast<int>(p.x), static_cast<int>(p.y));
+    std::fflush(stdout);
 }
 
-void drawButton(Display *dpy, Window win, GC gc, XftDraw *draw, XftFont *font,
-                XftColor *color, const Button &b, int scr)
+void onKey(lv_event_t *e)
 {
-    XSetForeground(dpy, gc, BlackPixel(dpy, scr));
-
-    // 已实现的按钮: 单层边框; 占位按钮: 双层边框, 视觉上区分"还没做"
-    XDrawRectangle(dpy, win, gc,
-                   static_cast<unsigned>(b.x), static_cast<unsigned>(b.y),
-                   static_cast<unsigned>(b.w - 1), static_cast<unsigned>(b.h - 1));
-    if (!b.active) {
-        XDrawRectangle(dpy, win, gc,
-                       static_cast<unsigned>(b.x + 2), static_cast<unsigned>(b.y + 2),
-                       static_cast<unsigned>(b.w - 5), static_cast<unsigned>(b.h - 5));
+    const uint32_t key = lv_event_get_key(e);
+    if (key == 'q' || key == 'Q' || key == LV_KEY_ESC) {
+        std::printf("按键退出 (q / Esc)\n");
+        std::fflush(stdout);
+        g_quit = true;
     }
-
-    // 标签垂直居中: 用字体的 ascent/descent 算基线
-    const int baseline = b.y + (b.h + font->ascent - font->descent) / 2;
-    drawTextCentered(dpy, draw, font, color, b.x + b.w / 2, baseline, b.label);
 }
 
-void redraw(Display *dpy, Window win, GC gc, XftDraw *draw,
-            XftFont *big, XftFont *small, XftColor *color, int win_w, int win_h)
+// 显示对象被删掉时会被调用 —— 无论是我们自己删, 还是窗口管理器点了关闭。
+void onDisplayDeleted(lv_event_t *e)
 {
-    const int scr = DefaultScreen(dpy);
+    LV_UNUSED(e);
+    g_disp = nullptr;  // 退出时别重复删
+    g_quit = true;
+}
 
-    // 背景: 铺白。Xft 画字是叠加式的, 每次重绘必须先自己清背景。
-    XSetForeground(dpy, gc, WhitePixel(dpy, scr));
-    XFillRectangle(dpy, win, gc, 0, 0,
-                   static_cast<unsigned>(win_w), static_cast<unsigned>(win_h));
-
-    // 主标题: 屏幕正中
-    if (big != nullptr) {
-        const int baseline = (win_h + big->ascent - big->descent) / 2;
-        drawTextCentered(dpy, draw, big, color, win_w / 2, baseline, kText);
+// ---------------------------------------------------------------------------
+// 界面
+// ---------------------------------------------------------------------------
+void applyButtonSkin(lv_obj_t *btn, bool active)
+{
+    // 白色底 + 1 像素黑边的扁平样式 (不跟随主题的圆角/阴影)
+    lv_obj_set_style_radius(btn, 0, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_black(), 0);
+    lv_obj_set_style_text_color(btn, lv_color_black(), 0);
+    if (g_font_small != nullptr) {
+        lv_obj_set_style_text_font(btn, g_font_small, 0);
     }
 
-    // 按钮
-    if (small != nullptr) {
-        for (int i = 0; i < kNumButtons; i++) {
-            drawButton(dpy, win, gc, draw, small, color, g_buttons[i], scr);
+    // 触摸反馈: 按下时底色压深, 免得手指按下去没有任何回应
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0xDDDDDD), LV_STATE_PRESSED);
+
+    // 占位按钮再加一圈 outline, 画成双层边框, 视觉上区分"还没做"
+    if (!active) {
+        lv_obj_set_style_outline_width(btn, 1, 0);
+        lv_obj_set_style_outline_pad(btn, 2, 0);
+        lv_obj_set_style_outline_color(btn, lv_color_black(), 0);
+    }
+}
+
+lv_obj_t *createButton(lv_obj_t *parent, const ButtonSpec &spec, lv_event_cb_t on_click)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    applyButtonSkin(btn, spec.active);
+    // 回调里要拿按钮文字, 直接借 user_data 传这个静态字符串
+    lv_obj_add_event_cb(btn, on_click, LV_EVENT_CLICKED,
+                        const_cast<char *>(spec.label));
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, spec.label);
+    lv_obj_center(label);
+    return btn;
+}
+
+void buildUi(int win_w, int win_h)
+{
+    lv_obj_t *scr = lv_screen_active();
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(scr, 0, 0);
+
+    // --- 主标题: 屏幕正中 ---
+    lv_obj_t *title = lv_label_create(scr);
+    lv_label_set_text(title, kText);
+    lv_obj_set_style_text_color(title, lv_color_black(), 0);
+    if (g_font_big != nullptr) {
+        lv_obj_set_style_text_font(title, g_font_big, 0);
+    }
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
+
+    // --- 尺寸: 触摸屏上按钮不能太小, 手指触点约 40~50 px ---
+    // 取屏高的 9%, 限制在 36..64 像素。
+    int bh = pct(win_h, 9);
+    if (bh < 36) {
+        bh = 36;
+    }
+    if (bh > 64) {
+        bh = 64;
+    }
+    const int margin = pct(win_w, 1);
+
+    // --- 右上角退出按钮 ---
+    lv_obj_t *quit_btn = createButton(scr, kButtons[0], onClickQuit);
+    lv_obj_set_size(quit_btn, pct(win_w, 8), bh);
+    lv_obj_align(quit_btn, LV_ALIGN_TOP_RIGHT, -margin, margin);
+
+    // --- 底部占位按钮: 一行均分 ---
+    // 用 flex 而不是自己算坐标: 每个按钮 flex_grow=1 自动等宽, 间距由
+    // pad_column 给出 —— 换屏幕尺寸或改按钮数量都不用改布局代码。
+    lv_obj_t *row = lv_obj_create(scr);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_radius(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, margin, 0);
+    lv_obj_set_size(row, win_w - 2 * margin, bh);
+    lv_obj_align(row, LV_ALIGN_BOTTOM_MID, 0, -margin);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    for (int i = 1; i < kNumButtons; i++) {
+        lv_obj_t *btn = createButton(row, kButtons[i], onClickPlaceholder);
+        lv_obj_set_height(btn, bh);
+        lv_obj_set_flex_grow(btn, 1);
+    }
+}
+
+// 开发机窗口模式下给鼠标画个指针。板上是触摸屏, 而且 LVGL 的 X11 后端
+// 会把 X 光标隐藏掉, 所以只在窗口模式加。
+void addMouseCursor(void)
+{
+    lv_indev_t *indev = lv_indev_get_next(nullptr);
+    while (indev != nullptr) {
+        if (lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER) {
+            lv_obj_t *cur = lv_label_create(lv_layer_top());
+            lv_label_set_text(cur, LV_SYMBOL_GPS);
+            lv_indev_set_cursor(indev, cur);
+            return;
         }
+        indev = lv_indev_get_next(indev);
     }
 }
 
@@ -296,14 +330,19 @@ void redraw(Display *dpy, Window win, GC gc, XftDraw *draw,
 int main(int argc, char **argv)
 {
     bool windowed = false;
+    const char *font_override = std::getenv("FIRECONTROL_FONT");
+
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--windowed") == 0) {
             windowed = true;
+        } else if (std::strncmp(argv[i], "--font=", 7) == 0) {
+            font_override = argv[i] + 7;
         } else if (std::strcmp(argv[i], "-h") == 0 ||
                    std::strcmp(argv[i], "--help") == 0) {
-            std::printf("用法: %s [--windowed]\n"
+            std::printf("用法: %s [--windowed] [--font=<字体文件>]\n"
                         "  (无参数)     全屏 —— 板上用这个 (没有窗口管理器)\n"
-                        "  --windowed   窗口模式 —— 开发机预览用\n"
+                        "  --windowed   1024x600 窗口模式 —— 开发机预览用\n"
+                        "  --font=FILE  指定字体文件 (默认按候选表自动找)\n"
                         "  -h, --help   显示本帮助\n"
                         "\n"
                         "交互: 点右上角【退出】按钮退出, 或按 q / Esc\n",
@@ -312,13 +351,20 @@ int main(int argc, char **argv)
         }
     }
 
-    // Xft 内部要按当前 locale 处理编码, 设成 UTF-8。必须在打开字体前设。
+    // FreeType 按 UTF-8 处理文本, 同时保证 printf 出的中文不乱码
     if (std::setlocale(LC_ALL, "") == nullptr) {
         std::fprintf(stderr, "警告: setlocale 失败, 中文可能显示异常\n");
     }
 
-    Display *dpy = XOpenDisplay(nullptr);
-    if (dpy == nullptr) {
+    // -----------------------------------------------------------------------
+    // 先探一下 X server
+    //
+    // 两件事: 全屏模式要知道屏幕实际尺寸 (LVGL 的 X11 后端只会按给它的尺寸
+    // 建窗口, 不会自己查屏幕), 以及连不上时把排查方法讲清楚。
+    // 这个连接只是查询, 查完就关 —— 真正绘图的连接由 LVGL 自己开。
+    // -----------------------------------------------------------------------
+    Display *probe = XOpenDisplay(nullptr);
+    if (probe == nullptr) {
         std::fprintf(stderr,
                      "无法连接 X server。\n"
                      "  DISPLAY = %s\n"
@@ -331,71 +377,65 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    const int scr = DefaultScreen(dpy);
-    const int screen_w = DisplayWidth(dpy, scr);
-    const int screen_h = DisplayHeight(dpy, scr);
-    const Visual *visual = DefaultVisual(dpy, scr);
-    const Colormap cmap = DefaultColormap(dpy, scr);
-
-    // 实际窗口尺寸。窗口被缩放时由 ConfigureNotify 更新。
-    int win_w = windowed ? kBoardWidth : screen_w;
-    int win_h = windowed ? kBoardHeight : screen_h;
-
-    Window win = XCreateSimpleWindow(
-        dpy, RootWindow(dpy, scr),
-        0, 0, static_cast<unsigned>(win_w), static_cast<unsigned>(win_h),
-        0,                          // 无边框: 板上没有 WM, 边框没意义
-        BlackPixel(dpy, scr),
-        WhitePixel(dpy, scr));
-
-    XStoreName(dpy, win, kTitle);
-
-    XSelectInput(dpy, win,
-                 ExposureMask | KeyPressMask | ButtonPressMask |
-                 StructureNotifyMask);
-
-    // 有窗口管理器时(开发机上)点关闭按钮要能退出。
-    // 注意: 不能声明成 const Atom —— XSetWMProtocols 的参数是非 const 的 Atom*,
-    // gcc 容忍这种 const 不匹配, 但 clang 会直接报错。
-    Atom wm_delete = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
-    XSetWMProtocols(dpy, win, &wm_delete, 1);
-
-    if (!windowed) {
-        XMoveResizeWindow(dpy, win, 0, 0,
-                          static_cast<unsigned>(screen_w),
-                          static_cast<unsigned>(screen_h));
-    }
-
-    XMapWindow(dpy, win);
-    if (!windowed) {
-        XRaiseWindow(dpy, win);
-    }
-
-    GC gc = XCreateGC(dpy, win, 0, nullptr);
-
-    // Xft 绘图上下文 + 黑色
-    XftDraw *draw = XftDrawCreate(dpy, win, const_cast<Visual *>(visual), cmap);
-    XftColor black;
-    const XRenderColor black_rc = {0, 0, 0, 0xffff};
-    if (!XftColorAllocValue(dpy, const_cast<Visual *>(visual), cmap, &black_rc, &black)) {
-        std::fprintf(stderr, "警告: 分配 Xft 颜色失败\n");
-    }
-
+    const int scr_n = DefaultScreen(probe);
+    const int screen_w = DisplayWidth(probe, scr_n);
+    const int screen_h = DisplayHeight(probe, scr_n);
+    const int screen_depth = DefaultDepth(probe, scr_n);
+    const char *vendor = ServerVendor(probe);
     std::printf("已连接 X server\n");
-    std::printf("  服务端 : %s\n", ServerVendor(dpy));
-    std::printf("  屏幕   : %dx%d, 深度 %d\n",
-                screen_w, screen_h, DefaultDepth(dpy, scr));
+    std::printf("  服务端 : %s\n", vendor);
+    std::printf("  屏幕   : %dx%d, 深度 %d\n", screen_w, screen_h, screen_depth);
+    XCloseDisplay(probe);
+
+    // 窗口尺寸算完就不变了: 板上没有窗口管理器, 没人会去缩放它。
+    const int win_w = windowed ? kBoardWidth : screen_w;
+    const int win_h = windowed ? kBoardHeight : screen_h;
     std::printf("  窗口   : %dx%d%s\n", win_w, win_h,
                 windowed ? " (窗口模式)" : " (全屏)");
 
-    XftFont *big = loadXftFont(dpy, scr, kBigFontNames,
-                               static_cast<int>(sizeof(kBigFontNames) / sizeof(kBigFontNames[0])),
-                               "主标题");
-    XftFont *small = loadXftFont(dpy, scr, kSmallFontNames,
-                                 static_cast<int>(sizeof(kSmallFontNames) / sizeof(kSmallFontNames[0])),
-                                 "按钮标签");
+    // -----------------------------------------------------------------------
+    // LVGL 初始化
+    // -----------------------------------------------------------------------
+    lv_init();
 
-    layoutButtons(win_w, win_h);
+    // FreeType 要在 lv_init 之后初始化: 它把上下文挂在 LVGL 的全局对象上。
+    if (lv_freetype_init(256) != LV_RESULT_OK) {
+        std::fprintf(stderr, "警告: FreeType 初始化失败, 中文可能显示为方框\n");
+    }
+
+    const char *font_file = pickFontFile(font_override);
+    if (font_file != nullptr) {
+        g_font_big = createFont(font_file, kBigFontPx, "主标题");
+        g_font_small = createFont(font_file, kSmallFontPx, "按钮标签");
+    }
+
+    g_disp = lv_x11_window_create(kTitle, win_w, win_h);
+    if (g_disp == nullptr) {
+        std::fprintf(stderr, "创建 X11 窗口失败\n");
+        return 1;
+    }
+    lv_x11_inputs_create(g_disp, nullptr);
+    lv_display_add_event_cb(g_disp, onDisplayDeleted, LV_EVENT_DELETE, nullptr);
+
+    // -----------------------------------------------------------------------
+    // q / Esc 要能全局生效
+    //
+    // LVGL 的键盘输入只发给"组里当前被聚焦的对象", 组里没有聚焦对象时按键会
+    // 被直接丢掉。所以把屏幕本身加进默认组并聚焦它, 让屏幕当快捷键的接收者。
+    // (按钮不进组, 所以点按钮不会把焦点抢走 —— 见 indev_click_focus。)
+    // -----------------------------------------------------------------------
+    lv_group_t *group = lv_group_get_default();
+    if (group != nullptr) {
+        lv_group_add_obj(group, lv_screen_active());
+        lv_group_focus_obj(lv_screen_active());
+    }
+    lv_obj_add_event_cb(lv_screen_active(), onKey, LV_EVENT_KEY, nullptr);
+
+    buildUi(win_w, win_h);
+
+    if (windowed) {
+        addMouseCursor();
+    }
 
     std::printf("  布局   : 主标题居中, 退出按钮右上角, %d 个占位按钮在底部\n",
                 kNumPlaceholders);
@@ -405,92 +445,28 @@ int main(int argc, char **argv)
     std::printf("  按 q / Esc        退出程序\n");
     std::fflush(stdout);
 
-    // ---------------------------------------------------------------------
-    // 竞态防护
-    //
-    // 窗口刚映射时可能收到启动瞬间遗留的杂散 ButtonPress。忽略映射后极短时间
-    // 内的点击, 免得一启动就误触发某个按钮。
-    //
-    // 不用 X 事件时间戳: XExposeEvent 没有 time 字段, 拿不到首帧时刻。
-    // ---------------------------------------------------------------------
-    const double mapped_at = now_sec();
-    constexpr double kIgnoreClicksSec = 0.4;
+    g_start_tick = lv_tick_get();
 
-    bool done = false;
-    while (!done) {
-        XEvent ev;
-        XNextEvent(dpy, &ev);
-
-        switch (ev.type) {
-        case Expose:
-            if (ev.xexpose.count == 0) {
-                redraw(dpy, win, gc, draw, big, small, &black, win_w, win_h);
-            }
-            break;
-
-        case ConfigureNotify:
-            win_w = ev.xconfigure.width;
-            win_h = ev.xconfigure.height;
-            layoutButtons(win_w, win_h);
-            redraw(dpy, win, gc, draw, big, small, &black, win_w, win_h);
-            break;
-
-        case KeyPress: {
-            const KeySym ks = XLookupKeysym(&ev.xkey, 0);
-            if (ks == XK_q || ks == XK_Escape) {
-                done = true;
-            }
-            break;
+    while (!g_quit) {
+        // X11 后端自己有两个定时器在读 X 事件 (显示 5 ms / 输入 1 ms),
+        // 这里只需要按 LVGL 给的间隔循环调用即可。
+        uint32_t idle = lv_timer_handler();
+        if (idle == LV_NO_TIMER_READY || idle > kMaxSleepMs) {
+            idle = kMaxSleepMs;
         }
-
-        case ButtonPress: {
-            const double t = now_sec();
-            if (t - mapped_at < kIgnoreClicksSec) {
-                std::printf("忽略启动瞬间的点击 (映射后 %.0f ms)\n",
-                            (t - mapped_at) * 1000.0);
-                std::fflush(stdout);
-                break;
-            }
-
-            const int x = ev.xbutton.x;
-            const int y = ev.xbutton.y;
-
-            for (int i = 0; i < kNumButtons; i++) {
-                if (!hitTest(g_buttons[i], x, y)) {
-                    continue;
-                }
-                if (i == 0) {
-                    std::printf("点击【%s】按钮, 退出\n", g_buttons[i].label);
-                    std::fflush(stdout);
-                    done = true;
-                } else {
-                    std::printf("点击【%s】(占位, 功能待定) 坐标 (%d,%d)\n",
-                                g_buttons[i].label, x, y);
-                    std::fflush(stdout);
-                }
-                break;
-            }
-            break;
-        }
-
-        case ClientMessage:
-            if (static_cast<Atom>(ev.xclient.data.l[0]) == wm_delete) {
-                done = true;
-            }
-            break;
-
-        default:
-            break;
-        }
+        usleep(idle * 1000);
     }
 
     std::printf("退出\n");
-    if (big != nullptr) XftFontClose(dpy, big);
-    if (small != nullptr) XftFontClose(dpy, small);
-    XftColorFree(dpy, const_cast<Visual *>(visual), cmap, &black);
-    XftDrawDestroy(draw);
-    XFreeGC(dpy, gc);
-    XDestroyWindow(dpy, win);
-    XCloseDisplay(dpy);
+    if (g_disp != nullptr) {
+        lv_display_delete(g_disp);  // 关 X 窗口, 停掉 tick 线程
+    }
+    if (g_font_big != nullptr) {
+        lv_freetype_font_delete(g_font_big);
+    }
+    if (g_font_small != nullptr) {
+        lv_freetype_font_delete(g_font_small);
+    }
+    lv_deinit();
     return 0;
 }

@@ -1,0 +1,98 @@
+/**
+ * lv_conf.h — FireControlApp 的 LVGL v9.2 配置
+ *
+ * 这里只写"和默认值不同"的项。没写的项由 LVGL 的 src/lv_conf_internal.h
+ * 补默认值 —— 所以升级 LVGL 时不用跟着抄一份上千行的模板。
+ *
+ * 由 CMakeLists.txt 通过 -DLV_CONF_PATH=<绝对路径> 指进来 (custom.cmake 负责
+ * 把它变成 lvgl 目标的编译宏)。
+ */
+
+#ifndef LV_CONF_H
+#define LV_CONF_H
+
+/*=========================================================================
+ * 颜色
+ *=======================================================================*/
+/**
+ * 32 位 (XRGB8888)。
+ *
+ * X11 后端内部就把画面组成 32bpp 的 XImage, 32 位是零转换路径;
+ * 16 位则每个像素都要做一次 RGB565→RGB888 展开, 1024x600 上一帧要多花
+ * 一百多万次移位。板上没有 GPU, 这些开销省下来是白赚的。
+ */
+#define LV_COLOR_DEPTH 32
+
+/*=========================================================================
+ * 标准库
+ *=======================================================================*/
+/**
+ * 用 libc 的 malloc/free, 不用 LVGL 内置内存池。
+ *
+ * 内置池要在编译期定死 LV_MEM_SIZE, 而中文 FreeType 字形的峰值占用取决于
+ * 用户点的界面 —— 池给小了会运行到一半分配失败, 给大了又白占内存。
+ * 板子是 Debian/glibc, 直接用 libc 堆更省心。
+ */
+#define LV_USE_STDLIB_MALLOC  LV_STDLIB_CLIB
+#define LV_USE_STDLIB_STRING  LV_STDLIB_CLIB
+#define LV_USE_STDLIB_SPRINTF LV_STDLIB_CLIB
+
+/*=========================================================================
+ * 日志
+ *=======================================================================*/
+/**
+ * 打开日志并打到 stdout。板上没有调试器, 出问题时 LVGL 自己的 WARN 是
+ * 唯一的线索 (比如"事件没人处理"这类)。
+ */
+#define LV_USE_LOG   1
+#define LV_LOG_LEVEL LV_LOG_LEVEL_WARN
+#define LV_LOG_PRINTF 1
+
+/*=========================================================================
+ * 字体
+ *=======================================================================*/
+/**
+ * 默认字体。界面上的文字全部由 FreeType 在运行时提供, 这个只是 LVGL 内部
+ * 兜底用的 (某些控件的默认样式引用 LV_FONT_DEFAULT)。
+ */
+#define LV_FONT_MONTSERRAT_14 1
+
+/**
+ * FreeType: 运行时从板上字体文件加载字形。
+ *
+ * 相比"用 lv_font_conv 预生成 C 数组"的好处: 改文案不用重新生成字库,
+ * 界面里出现任何汉字都能显示。代价是依赖 libfreetype (板上本来就有,
+ * Xft 也在用它)。
+ *
+ * 不开 LV_FREETYPE_USE_LVGL_PORT: 让 FreeType 用自己的分配器, 免得它的
+ * 内部缓存和 LVGL 的内存管理互相纠缠。
+ */
+#define LV_USE_FREETYPE 1
+
+/*=========================================================================
+ * 驱动: X11
+ *=======================================================================*/
+/**
+ * 用 LVGL 的 X11 后端复用板上现有的 Xorg。
+ *
+ * 为什么不是 framebuffer: 板上跑着 Xorg, /dev/fb0 归它管 —— 直接写
+ * framebuffer 会和 X server 抢同一块屏。X11 后端把绘制交给 X server,
+ * 部署方式一行都不用改。触摸在这里就是普通的鼠标事件, 键盘也一并有了。
+ *
+ * DIRECT_EXIT = 0: 窗口关闭时不让 LVGL 直接 exit(0), 而是走我们自己的
+ * LV_EVENT_DELETE 回调做清理 (删字体、lv_deinit)。
+ */
+#define LV_USE_X11 1
+#define LV_X11_DIRECT_EXIT   0
+#define LV_X11_DOUBLE_BUFFER 1
+
+/**
+ * 局部刷新: 只有变化的区域会被画出来并 XPutImage 到窗口。
+ * 1024x600 全屏刷一帧是 2.4 MB 的数据, 局部刷新能把静止界面的开销降到接近 0。
+ * (另外两种模式 DIRECT/FULL 是整屏, 板上没必要。)
+ */
+#define LV_X11_RENDER_MODE_PARTIAL 1
+#define LV_X11_RENDER_MODE_DIRECT  0
+#define LV_X11_RENDER_MODE_FULL    0
+
+#endif /* LV_CONF_H */

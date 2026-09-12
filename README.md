@@ -25,7 +25,19 @@
 
 ## 前言
 
-- 本项目旨在完成个人的省级大创项目的目的，本仓库仅作个人存储，不建议对外使用
+> ### 合作声明
+>
+> 本项目由两人共同开发，各自负责的模块如下：
+>
+> | 成员 | 分工 |
+> |---|---|
+> | **Skywindfox** | 硬件验证与系统环境（开发板、Debian 系统、Fedora + Zig 交叉编译）、CMake 工程与中控软件、文档 |
+> | **FBI-0537** | 交叉编译环境（`armhf-toolchain/`，Windows + Docker）与构建脚本、LVGL 界面重构 |
+>
+> **约定**：各自的编译环境与原有注释都保留，改动对方负责的文件时不删他的说明；
+> 两个开发机上的交叉编译产物互不替代（Fedora + Zig 与 Windows + Docker 各成一套）。
+
+- 本项目旨在完成省级大创项目（由两人共同合作）的目的，本仓库仅作个人存储，不建议对外使用
 - 本项目的目的是完成一个在 STM32MP135 环境下，正点原子开发板作为硬件、以自编译的Debian Linux软件开发的智能楼宇消防系统。
 - 主要功能模块： （暂未填写）
 - 当前完成度 ： 
@@ -68,14 +80,20 @@
 
 ## 1. 项目构成
 
-一个 CMake 工程，产出三个可执行文件：
+一个 CMake 工程，产出三个可执行文件和两个静态库：
 
 | 目标 | 源文件 | 说明 | 能否交叉编译 |
 |---|---|---|---|
 | `halloworld` | `src/main.cpp` | **控制台程序**，打印 `hallo world`。不开窗口 | ✅ 能 |
-| `halloworld-gui` | `src/gui.cpp` | **X11 图形界面**，全屏/窗口显示 `halloworld` | ✅ 能（需 X11 sysroot，见第 4 节） |
+| `halloworld-gui` | `src/gui.cpp` | **LVGL 图形界面**（X11 后端），全屏/窗口显示 `halloworld` | ✅ 能（需 ARM 版 X11 + freetype，见第 4 节） |
 | `test_greeting` | `tests/test_greeting.cpp` | 单元测试，`ctest` 调用 | ❌ 交叉产物跑不了 |
 | `libfirecontrol.a` | `src/greeting.cpp` | 纯逻辑层静态库，上面两个程序都链接它 | ✅ 能 |
+| `liblvgl.a` | `third_party/lvgl/` | LVGL v9.2.3 源码（随仓库提交），只被 `halloworld-gui` 使用 | ✅ 能 |
+
+界面用的是 **LVGL v9.2.3**：控件、布局、字体、事件都由它管，自己写的不再是
+"画矩形 + 命中检测"，而是控件树 + 回调。配置在 `lv_conf.h`（只写覆盖项，其余走
+LVGL 默认值），显示后端选的是 LVGL 自带的 X11 驱动，中文由 FreeType 在运行时从
+板上的文泉驿正黑取字形。
 
 **⚠️ 命名注意**：`halloworld` 拼写是 `hallow` 而非 `hollow`，沿用最初的文件名。
 GUI 之所以叫 `halloworld-gui`，是因为 `halloworld` 这个名字已被控制台程序占用。
@@ -218,21 +236,43 @@ python3 scripts/make-sysroot.py      # 解包
 sudo apt install g++ make pkg-config libx11-dev
 ```
 
-排查触摸/显示时可加：
+### 板上需要的运行时依赖
+
+GUI 是动态链接的，跑之前确认这三样都在（板子都自带，一般不用管）：
+
+| 依赖 | 用途 | 板上来源 |
+|---|---|---|
+| `libX11.so.6` | LVGL 的 X11 显示/输入后端 | Xorg |
+| `libfreetype.so.6` | LVGL 的中文字形 | Xft 的传递依赖 |
+| 中文字体（文泉驿正黑 `wqy-zenhei.ttc`） | 界面中文 | `fonts-wqy-zenhei` |
+
+缺字体时会打印警告（汉字变方框），可以用参数指定别的字体文件绕开：
 
 ```bash
-sudo apt install xinput x11-utils x11-apps
+./halloworld-gui --font=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+# 或者用环境变量, 调试时省得每次敲参数
+FIRECONTROL_FONT=/path/to/font.ttc ./halloworld-gui
 ```
 
 ### 内存约束（437 MiB 是硬指标）
 
+LVGL 这条路的显示开销（**按源码算出来的，不是板上实测值**）：
+
+| 项 | 大小 | 出处 |
+|---|---|---|
+| XImage 缓存（整屏 32bpp） | 1024×600×4 ≈ **2.4 MiB** | `lv_x11_display.c` |
+| 绘制缓冲（局部刷新 = 屏的 1/10，双缓冲） | 2 × 246 KiB ≈ **0.5 MiB** | 同上 |
+| 中文字形缓存 | 按需增长（上限 256 字形） | `lv_conf.h` |
+
+总计 **3 MiB 量级**，对比：
+
 | 方案 | 常驻内存 |
 |---|---|
-| 裸 Xlib（本项目） | 约 2–4 MiB |
-| 双缓冲（X Pixmap，1024×600） | +2.3 MiB |
+| LVGL + X11 后端（本项目） | 显示路径约 3 MiB（估算） |
 | GTK4 空程序 | 约 40–80 MiB |
+| Qt6 | 数十 MiB 起 |
 
-**这是本项目用裸 Xlib 而非 GTK/Qt 的量化理由。**
+**这是本项目继续留在轻量框架而不是转 GTK/Qt 的量化理由。**
 
 ---
 
@@ -255,6 +295,15 @@ sudo apt install xinput x11-utils x11-apps
 **最常见的困惑**：`./build.sh run` 跑的是**控制台程序，不开窗口**。
 要看窗口用 `./build.sh gui`。
 
+**在 Windows 上**走 Docker 那套，不用 `build.sh`：
+
+```powershell
+cd armhf-toolchain
+.\build-armhf.ps1                    # 默认: 交叉编译 GUI + 产物校验
+.\build-armhf.ps1 -Action console    # 只编控制台程序与逻辑库 (不含 GUI, 快)
+.\build-armhf.ps1 -Action shell      # 进容器手动操作
+```
+
 ### 6.2 直接用 CMake
 
 ```bash
@@ -271,26 +320,40 @@ cmake -B build-armhf -S . \
       -DBUILD_TESTING=OFF
 cmake --build build-armhf -j
 
-# armhf X11 GUI（需要 sysroot）
-cmake -B build-gui-armhf -S . \
-      -DCMAKE_TOOLCHAIN_FILE=$HOME/Code/armhf-sysroot/toolchain-armhf-x11.cmake \
+# armhf GUI（需要带 ARM 版 X11/freetype 的交叉环境）
+# 推荐直接用 armhf-toolchain/build-armhf.ps1（Docker）。它内部做的事等价于:
+cmake -B /out -S . \
+      -DCMAKE_TOOLCHAIN_FILE=/tc/toolchain-armhf-x11.cmake \
       -DBUILD_TESTING=OFF -DWITH_GUI=ON
-cmake --build build-gui-armhf -j
+cmake --build /out -j
+# 容器里: /work = 仓库(只读)、/tc = 工具链、/out = ../armhf-toolchain/Output
 ```
+
+GUI 相关的可调项（都是 cache 变量）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `WITH_GUI` | `AUTO` | `AUTO` 时：原生有 x11/freetype 就编，交叉编译直接跳过 |
+| `LVGL_DIR` | `third_party/lvgl` | LVGL 源码目录 |
+| `LV_CONF_PATH` | `<仓库>/lv_conf.h` | LVGL 配置文件。**在 `add_subdirectory` 之前设置**才有效 |
 
 ### 6.3 部署到板子
 
 ```bash
-scp build-gui-armhf/halloworld-gui root@<板子IP>:~/
+scp build-gui-armhf/halloworld-gui root@<板子IP>:~/     # Fedora + Zig 那条路线
 ssh root@<板子IP> 'DISPLAY=:0 ./halloworld-gui'
 ```
 
-或者**板上原生编译**（更简单，不用 sysroot）：
+走 Windows + Docker 那套的话，产物在 `armhf-toolchain/Output/`（不落在本仓库里）：
 
-```bash
-scp src/gui.cpp root@<板子IP>:~/
-ssh root@<板子IP> 'g++ -std=c++20 -O2 gui.cpp -o halloworld-gui $(pkg-config --cflags --libs x11)'
+```powershell
+scp "..\armhf-toolchain\Output\halloworld-gui" root@<板子IP>:~/
 ```
+
+> **板上原生编译这条路现在走不通了**：以前 `gui.cpp` 是单文件、只用 Xft，
+> `g++ gui.cpp $(pkg-config --libs xft x11)` 就行。现在要用 LVGL，得把整个
+> `third_party/lvgl` + `lv_conf.h` 拷过去，还要装 `libfreetype-dev`、
+> 编 311 个 `.c` —— 不划算。**直接交叉编译再 scp 过去。**
 
 ### 6.4 GUI 交互
 
@@ -312,9 +375,28 @@ ssh root@<板子IP> 'g++ -std=c++20 -O2 gui.cpp -o halloworld-gui $(pkg-config -
 | 操作 | 效果 |
 |---|---|
 | 点右上角 **【退出】** | 退出程序 |
-| 点底部 **功能 1~4** | 目前只打印提示（**功能待定**） |
+| 点底部 **功能 1~4** | 目前只打印提示（**功能待定**），顺带打印点击坐标 |
 | 按 `q` / `Esc` | 退出程序 |
 | 点窗口管理器关闭按钮 | 退出（板上没有 WM，板子上用不到，靠【退出】按钮） |
+
+打印坐标是故意留的：板上还没验证过触摸坐标是否偏移（见第 12 节待办），
+点一下就能看出来。
+
+**实现上的几个点**：
+
+- **布局**：主标题居中；退出按钮贴右上角；底部 4 个按钮放在一个 flex 行里，
+  每个 `flex_grow=1` 自动等宽，列间距 = 屏宽的 1%。换屏幕尺寸不用改代码。
+- **窗口尺寸**只在启动时算一次。板上没有窗口管理器，没人会去缩放它 ——
+  `--windowed` 只是给开发机预览用的 1024×600。
+- **按钮文字**用 FreeType 装 18 px，主标题 40 px，字体文件在启动时按候选表找
+  （见第 5 节）。
+- **`q` / `Esc` 为什么能全局生效**：LVGL 的键盘输入只发给"输入组里当前被聚焦的
+  对象"，组里没有聚焦对象时按键会被直接丢掉。所以启动时把**屏幕本身**加进默认
+  组并聚焦它（按钮不进组，点按钮不会把焦点抢走）。
+- **启动后 400 ms 内的点击会被忽略**：窗口刚映射时可能收到遗留的杂散点击，
+  见第 10.2 节 #12。
+- **窗口模式下会画一个跟随鼠标的小指针**：LVGL 的 X11 后端会把 X 光标隐藏掉，
+  板上是触摸屏不需要，但开发机预览时不画个指针就不知道鼠标在哪。
 
 **注意**：**不支持"双击窗口退出"** —— 那是早期行为，已移除。原因见第 10.2 节 #12：
 双击曾导致窗口"启动即关闭"的竞态，而且在触摸屏上容易误触。
@@ -330,6 +412,8 @@ ssh root@<板子IP> 'g++ -std=c++20 -O2 gui.cpp -o halloworld-gui $(pkg-config -
 | 功能 4 | (769, 536) | 243×54 |
 
 高度 54 px 是按触摸操作设计的（手指触点约 40–50 px），代码里限制在 36–64 px。
+底部一排的宽度由 flex 均分得出（(1024−20−3×10)/4 = 243.5），整数取整后
+可能有 ±1 像素的差异 —— 位置表里的 x 是按 243 算的。
 
 ---
 
@@ -357,6 +441,11 @@ GUI 相关的三个任务：
 `build/compile_commands.json`，`.vscode/c_cpp_properties.json` 指向它。所以
 补全/跳转/报错与真实编译参数一致。
 **前提是先跑一次配置**（`Ctrl+Shift+B` 会做），否则那个文件不存在。
+交叉编译时导出的是 armhf 那套参数（`build-armhf/compile_commands.json`），
+里面也包含 LVGL 的头文件路径 —— 改 GUI 代码时用它补全更准。
+
+> ⚠️ 这些任务都用 `bash`，是针对 Linux 开发机写的。在 Windows 上构建走
+> `armhf-toolchain/build-armhf.ps1`（Docker），任务列表还没跟着改。
 
 ---
 
@@ -366,7 +455,8 @@ GUI 相关的三个任务：
 FireControlApp/
 ├── README.md                      本文件
 ├── CMakeLists.txt                 顶层构建定义
-├── build.sh                       便捷构建封装
+├── lv_conf.h                      LVGL 配置（只写覆盖项）
+├── build.sh                       便捷构建封装（Linux 开发机）
 ├── .gitignore
 ├── cmake/
 │   └── toolchain-armhf.cmake      armhf 工具链（纯逻辑层，无 X11）
@@ -374,7 +464,9 @@ FireControlApp/
 │   ├── greeting.h                 纯逻辑层接口
 │   ├── greeting.cpp               纯逻辑层实现 → libfirecontrol.a
 │   ├── main.cpp                   控制台程序入口
-│   └── gui.cpp                    X11 图形界面
+│   └── gui.cpp                    LVGL 图形界面（X11 后端）→ halloworld-gui
+├── third_party/
+│   └── lvgl/                      LVGL v9.2.3 源码（已裁掉 docs/demos/tests/examples）
 ├── tests/
 │   └── test_greeting.cpp          单元测试
 └── .vscode/
@@ -391,6 +483,19 @@ build-armhf/          armhf 纯逻辑层 + 控制台
 build-gui-armhf/      armhf X11 GUI
 build-debug/          Debug 构建
 ```
+
+> 上面这几个都在本仓库里，由 `build.sh`（Fedora + Zig 那条路线）产生。
+>
+> **Windows + Docker 那条路线（`armhf-toolchain/`）的产物不在本仓库**，
+> 统一落在 `../armhf-toolchain/Output/`：源码目录是**只读挂载**，构建写不进来。
+> 两条路线的产物目录互不替代、互不覆盖 —— 改对方那条路线时不要动这些目录。
+
+> LVGL 源码是**直接放进仓库**的（不是 submodule，也不是 configure 时下载），
+> 所以任何机器上拉下来、断网也能编。为了让仓库不至于被撑大，裁掉了只跟
+> 文档/示例/测试/CI 有关的目录：`docs/` `demos/` `examples/` `tests/` `scripts/`
+> `.github/` `.devcontainer/`，以及 `env_support/cmsis-pack/`（5.6 MB 的 Keil/MDK
+> 打包件，本项目用不到）。裁完 16.1 MB / 827 个文件。
+> **升级 LVGL 时要保持同样的裁剪**，替换后重新跑一次构建确认。
 
 ---
 
@@ -414,52 +519,67 @@ add_library(firecontrol
 
 否则会出现"文件明明写了却没被编译"的困惑。
 
-### 9.2 为什么用 Xlib + Xft，而不是 GTK/Qt
+### 9.2 为什么用 LVGL，后端为什么选 X11 + FreeType
 
-X11 是**客户-服务端**模型：应用程序只是 X 客户端，把绘图请求发给 X server。
-所以客户端只需要库和协议头文件，不需要服务端那套。
+第一阶段是手写 Xlib + Xft：自己画矩形、自己算坐标、自己做命中检测。能跑，
+但**再加一个界面元素就要把"布局 + 绘制 + 命中检测"重写一遍**，继续堆下去不合适。
+换成 LVGL 之后这些交给控件树的样式/布局系统，界面代码只剩"建控件 + 挂回调"。
 
-| 方案 | 产物 | 依赖 | 437 MiB 板子 |
-|---|---|---|---|
-| **Xlib + Xft**（本项目） | 约 12 KB | libX11 + libXft + libfontconfig + libfreetype | ✅ |
-| 纯 Xlib（无 Xft） | 约 8 KB | libX11 | ⚠️ **画不出中文** |
-| GTK4 | 数 MB | glib/pango/cairo/… | ❌ 40–80 MiB 起步 |
-| Qt6 | 数十 MB | 一大堆 | ❌ |
+**LVGL 的代价**（437 MiB 板子上的硬指标）：
 
-**为什么必须带 Xft**：X11 核心位图字体只有 **ISO-8859-1**（Latin-1）编码，
-**没有汉字字形**。用 `XDrawString` 画中文，UTF-8 的多字节会被当成多个 Latin-1
-字符各画一个，结果是乱码（实测显示成 `蚂蚁` 之类）。
+| 项 | 值 |
+|---|---|
+| 源码（裁剪后，随仓库提交） | 21.7 MB |
+| `halloworld-gui` 二进制（armhf, stripped） | **399,624 字节** |
+| 显示路径运行时内存 | 约 3 MiB（算法见第 5 节） |
+| 运行时依赖 | `libX11.so.6` + `libfreetype.so.6`（板上都有） |
 
-Xft 走 **FreeType + fontconfig**，支持完整 Unicode 与 TrueType 反锯齿：
+#### 显示后端为什么不用 framebuffer
+
+LVGL 更"嵌入式"的用法是 `LV_USE_LINUX_FBDEV` 直接写 `/dev/fb0`
+（+ `LV_USE_EVDEV` 读触摸）。但**板上跑着 Xorg，`/dev/fb0` 归它管** ——
+两个程序抢同一块屏，画出来的东西会互相覆盖。选 X11 后端的好处是
+**部署方式一行都不用改**，而且触摸在 X11 里就是普通鼠标事件（见 9.3）。
+
+真要去掉 Xorg，只需要把 `gui.cpp` 里的显示初始化换掉：
 
 ```cpp
-XftFont *f = XftFontOpenName(dpy, scr, "WenQuanYi Zen Hei:size=18");
-XftDrawString32(draw, &color, f, x, y, codepoints, n);
+// 现在（X11 后端）
+g_disp = lv_x11_window_create(kTitle, win_w, win_h);
+lv_x11_inputs_create(g_disp, nullptr);
+
+// 换成 framebuffer + evdev（界面代码一行不用动）
+g_disp = lv_linux_fbdev_create();
+lv_linux_fbdev_set_file(g_disp, "/dev/fb0");
+lv_indev_t *touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, "/dev/input/event0");
 ```
 
-板子上已预装 **文泉驿正黑**（`wqy-zenhei.ttc`，含 Regular / Mono / 点阵三个变体），
-`libXft.so.2` 和 `libfontconfig.so.1` 也都在（X 桌面环境自带）。
+#### 中文为什么走 FreeType，而不是预生成字库
 
-**实测验证**（本机 Xwayland + 文泉驿，用字形宽度指标判断真实渲染）：
+`lv_font_conv` 把用到的汉字转成 C 数组编进程序：零运行时依赖、启动最快，
+但**每改一个字都要重新生成**，而且字库体积随字数增长。
+开 `LV_USE_FREETYPE` 则是运行时从 `wqy-zenhei.ttc` 取字形 —— 改文案不用重编，
+界面里出现任何汉字都能显示。代价是多一个 `libfreetype` 依赖，而板上本来就有
+（Xft 也在用它）。
 
-| 文本 | UTF-8 字节 | 解析后码点 | 像素宽度 |
-|---|---|---|---|
-| `退出` | 6 | **2** ✓ | 48 |
-| `功能 1` | 8 | **4** ✓ | 66 |
-| `halloworld` | 10 | 10 | 113 |
-| `中` | 3 | **1** ✓ | 24 |
-| `A` | 1 | 1 | 14 |
+#### `lv_conf.h` 改了哪几处
 
-汉字/字母宽度比 = **1.71** —— 汉字是宽字形，证明字形真实存在。
-（若是乱码，2 个汉字会被拆成 6 个拉丁字符，码点数和宽度都会对不上。）
+只覆盖 4 处，其余全部走 LVGL 的默认值（`src/lv_conf_internal.h` 会补）：
 
-### 9.2.1 Xft 交叉编译的三个坑
+| 配置 | 值 | 为什么 |
+|---|---|---|
+| `LV_COLOR_DEPTH` | 32 | X11 后端内部本来就按 XRGB8888 组 XImage，32 位是**零转换路径**；16 位每个像素都要做一次 RGB565→RGB888 展开 |
+| `LV_USE_STDLIB_*` | `LV_STDLIB_CLIB` | 用 libc 堆。内置内存池要在编译期定死 `LV_MEM_SIZE`，而中文字形缓存的峰值取决于用户点开什么界面，给不准 |
+| `LV_USE_X11` | 1 | 显示 + 输入后端（含键盘/滚轮） |
+| `LV_USE_FREETYPE` | 1 | 中文字形 |
+
+### 9.2.1 集成 LVGL 踩到的三个坑
 
 | 现象 | 原因 | 解法 |
 |---|---|---|
-| `ft2build.h: file not found` | CMake 的 `FindX11` 只给 Xft 自己的头文件路径，**不给传递依赖**（freetype2 在 `/usr/include/freetype2`） | 改用 `pkg_check_modules(XFT xft x11)`，pkg-config 正确处理 `Requires` 链 |
-| 链接报 `DSO missing from command line` | `xft.pc` 把 `x11` 放在 **`Requires.private`** 里，而 `pkg-config --libs` **默认不输出私有依赖** | 显式写 `pkg_check_modules(XFT QUIET xft x11)` |
-| `--cflags xft` 没有 `-I/usr/include` | pkg-config 认为 `/usr/include` 是默认路径会省略，但交叉编译时 zig 不把 sysroot 的 include 当默认 | toolchain 里显式加 `-isystem $SYSROOT/usr/include` |
+| 编译时满屏 `#pragma message: Possible failure to include lv_conf.h` | LVGL 用 `LV_CONF_H` 这个宏名判断配置文件到底有没有被包含；自己的 `lv_conf.h` 顺手写了 `FIRECONTROL_LV_CONF_H` 当防重宏，LVGL 不认 | 防重宏必须叫 `LV_CONF_H` |
+| `fatal error: ft2build.h: No such file or directory`，报错行落在 `lv_draw_vg_lite_label.c` | `ft2build.h` 在 `/usr/include/freetype2`，不是默认搜索路径。**只给 `halloworld-gui` 加 include 路径不够** —— LVGL 是独立目标，它编 `lv_freetype.c` 时也要这个路径 | 把 `GUI_DEPS_INCLUDE_DIRS` 同时挂到 `lvgl` 目标上 |
+| 按 `q` / `Esc` 完全没反应 | LVGL 的键盘事件只发给"输入组里当前被聚焦的对象"；组里没有聚焦对象时按键会被**直接丢掉** | 启动时把屏幕本身加进默认组，再 `lv_group_focus_obj(屏幕)` |
 
 ### 9.3 触摸在 X11 里就是普通 Button 事件
 
@@ -472,15 +592,18 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 ```
 
 **单点触摸在 X11 里就是普通的 `ButtonPress`，坐标在 `xbutton.x/y`。**
-所以裸 Xlib 就能收触摸，**不需要 XInput2**（XI2 的价值在多指手势和压力值）。
+所以不需要 XInput2（XI2 的价值在多指手势和压力值）。LVGL 的 X11 输入驱动
+就是把 `ButtonPress` 翻译成 `LV_INDEV_TYPE_POINTER` 的按下/抬起。
 
 ### 9.4 全屏而非窗口模式
 
 板上**没有窗口管理器**，普通模式下窗口位置和尺寸没人管。所以：
 
-- 默认全屏，自己用 `XMoveResizeWindow` 占满屏幕
+- 默认按 X 报告的屏幕实际尺寸建窗口（`XOpenDisplay` 查一次，查完就关），
+  位置 (0,0)、无边框 —— 没有 WM 时 X 会把它放在请求的位置并拉高
 - 窗口没有标题栏、边框、关闭按钮
-- `--windowed` 参数是给开发机预览用的
+- `--windowed` 参数固定 1024×600，是给开发机预览用的
+- 布局只在启动时算一次：没有 WM 就没人会去缩放窗口
 
 ---
 
@@ -492,16 +615,20 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 
 | # | 问题 | 说明 |
 |---|---|---|
-| 1 | **GUI 产物是动态链接的** | 运行时依赖板子上的 `libX11.so.6`。**已在板上实测通过** —— 板子跑着 Xorg，该库存在，动态链接正常 |
-| 2 | **`halloworld` 拼写** | `hallow` 通常是 `hollow` 的笔误。沿用最初文件名未改 |
-| 3 | **Window 首次映射可能收到杂散事件** | 见 10.2 #12。已缓解：忽略映射后 400 ms 内的点击，且退出改为点按钮（不再是单击/双击全屏）。根因（X server/WM 行为）不在本项目控制内 |
-| 4 | **armhf 的 GUI 无法在开发机运行** | 架构不同 + 需要板子的 libX11。必须 scp 到板子 |
-| 5 | ~~X11 中文显示~~ **已解决** | 原方案用 X11 核心位图字体（只有 ISO-8859-1，画不出汉字，中文显示为乱码）。**已改用 Xft + FreeType + fontconfig**，中文正常。见第 9.2 节 |
+| 1 | **LVGL 版还没在板上实测过** | 只做了交叉编译验证（构建 0 警告、产物是 armv7 hard-float、`NEEDED` 为 libX11/libfreetype）。**上手先点一遍【退出】和底部按钮**，确认触摸坐标、中文显示、字体路径都对 |
+| 2 | **GUI 产物是动态链接的** | 运行时依赖板子上的 `libX11.so.6` 和 `libfreetype.so.6`。老版（Xft）已在板上实测通过；新版依赖的这两个库板上都有，但没实测 |
+| 3 | **`halloworld` 拼写** | `hallow` 通常是 `hollow` 的笔误。沿用最初文件名未改 |
+| 4 | **Window 首次映射可能收到杂散事件** | 见 10.2 #12。已缓解：忽略启动后 400 ms 内的点击，且退出改为点按钮。根因（X server/WM 行为）不在本项目控制内 |
+| 5 | **armhf 的 GUI 无法在开发机运行** | 架构不同 + 需要板子的 libX11。必须 scp 到板子（或在容器里用 qemu + Xvfb 跑，但那要额外装包） |
 | 6 | **CMake 不自动扫描源文件** | 新增 `.cpp` 必须手动加到 `CMakeLists.txt`，见 9.1 |
 | 7 | **`build.sh run` 不开窗口** | 它跑的是控制台程序。看窗口用 `build.sh gui` |
-| 8 | **armhf 首次编译慢** | Zig 要从源码构建 libc++，首次约 65 秒。之后走缓存几秒 |
+| 8 | **armhf 首次编译慢** | Zig 要从源码构建 libc++（约 65 秒）；LVGL 有 311 个 `.c`，Docker 里首次全量编译要几分钟，之后增量 |
+| 9 | **容器里 apt 源可能不通** | 镜像用的是清华 TUNA。网络受限时 `docker build` 会在装包那步失败，此时可用已有的旧镜像继续编（多装了 libxft 之类，不影响） |
+| 10 | **LVGL 源码是手工裁剪过的** | 见第 8 节。升级 LVGL 时按同样的目录裁剪 |
 
 ### 10.2 踩过的坑（都已解决，记录以备重犯）
+
+（LVGL 集成踩的三个坑记在 **9.2.1** 节，这里不重复。）
 
 #### Zig 相关
 
@@ -548,7 +675,40 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 
 ## 11. 实测结果
 
-### 开发机（x86-64，Fedora 44）
+### 11.1 LVGL 版（当前）
+
+#### 开发机（Windows + Docker）
+
+| 项目 | 结果 |
+|---|---|
+| armhf configure | 容器 Debian 12 bookworm，`arm-linux-gnueabihf-g++` **GNU 12.2.0**，`IS_CROSS_BUILD=ON`，`HAVE_GUI=TRUE` |
+| armhf 构建 | **0 error**；唯一一条 warning 是 `src/greeting.cpp` 里那行测试代码的 `unused variable 'a'`（见 armhf-toolchain README 5.3），与本轮改动无关 |
+| 原生 x86-64 构建 / `ctest` | ⚠️ **未做** —— 这台机器是 Windows，没有 x86-64 Linux 环境 |
+
+#### armhf 交叉编译产物（实测，位于 `armhf-toolchain/Output/`）
+
+| 产物 | 结果 |
+|---|---|
+| `halloworld` | ELF32 ARM hard-float，stripped，**5,660 字节** |
+| `halloworld-gui` | ELF32 ARM hard-float，stripped，**399,624 字节** |
+| GUI 动态依赖 | `libX11.so.6` / `libfreetype.so.6` / `libgcc_s.so.1` / `libc.so.6` |
+| `libfirecontrol.a` / `liblvgl.a` | 静态库 |
+| LVGL 编译单元 | 311 个 `.c`；`lv_freetype*.o`、`lv_x11*.o` 都在（说明 `lv_conf.h` 生效了） |
+
+#### 运行验证
+
+| 项目 | 结果 |
+|---|---|
+| ARM 二进制能在本机装载执行（Docker Desktop 的 binfmt/qemu） | ✅ |
+| `halloworld-gui` 连不上 X server 时的报错与排查提示 | ✅ 实测输出正常 |
+| **真实 X server 下的界面**（窗口、中文、点击、按键） | ⚠️ **未验证** —— 环境里 apt 源被网络策略挡了（502），装不了 `qemu-user-static` / `Xvfb`。要在板上试，或者在带 X 的 Linux 上编原生版试 |
+
+### 11.2 老版（Xlib + Xft）的实测记录
+
+以下是**重构之前那一版**的成绩，保留作历史证据 —— "ARM 产物能执行、动态链接、
+无 WM 全屏、中文能显示"这几件事在板上是跑通过的。
+
+#### 开发机（x86-64，Fedora 44）
 
 | 项目 | 结果 |
 |---|---|
@@ -560,7 +720,7 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 | `test_greeting` | 13,624 字节，全部断言通过 |
 | `compile_commands.json` | 3 个编译单元，含真实编译标志 |
 
-### armhf 交叉编译
+#### armhf 交叉编译（Fedora + Zig）
 
 | 项目 | 结果 |
 |---|---|
@@ -571,7 +731,7 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 | 目标文件对照 | 原生 `x86-64` / armhf `ARM`（确认没被误编） |
 | 首次 configure 耗时 | 约 65 秒（Zig 构建 libc++），之后走缓存 |
 
-### ✅ 已在板上实测通过（关键里程碑）
+#### 板上实测通过（关键里程碑）
 
 **交叉编译的 ARM 二进制已在真实硬件（STM32MP135）上成功运行**，
 全屏窗口正常显示 `halloworld`。这一次运行同时验证了几件此前只是"推断"的事：
@@ -584,22 +744,29 @@ Goodix 触摸面板 ──I2C──▶ 内核 goodix 驱动 ──▶ /dev/input
 | 无窗口管理器时全屏模式可用 | 只是设计推断 | ✅ 全屏铺满显示 |
 | `XDrawString` + 位图字体能出字 | 未验 | ✅ 文字正常显示 |
 
-### ⚠️ 仍未验证的部分
+⚠️ 但这些**不能直接套到 LVGL 版上**：显示/输入路径、字体加载方式都换了，
+新版必须重新在板上跑一遍。
 
-- **触摸屏的实际事件**：点【退出】按钮能否退出、按钮命中区域是否准确、坐标是否对齐，都还没在板上试过
-- **窗口模式**（`--windowed`）在板上无 WM 环境下的表现
-- 长时间运行的稳定性
-- 实际触摸坐标范围与 1024×600 是否匹配
+### 11.3 ⚠️ 仍未验证的部分（LVGL 版）
+
+- **触摸屏的实际事件**：点【退出】/底部按钮能否触发、命中区域与坐标是否对齐
+- **中文显示**：LVGL 的 FreeType 后端能否在板上找到并加载 `wqy-zenhei.ttc`
+- **窗口模式**（`--windowed`）在无 WM 环境下的表现
+- 长时间运行的稳定性、实际常驻内存
 
 ---
 
 ## 12. 待办
 
-- [x] ~~在板子上实测 `halloworld-gui`~~ —— **已完成，全屏窗口正常显示**
+- [ ] **在板上实测 LVGL 版**：全屏显示是否正常、中文是否正常、点【退出】能否退出
 - [ ] 板上实测触摸：点【退出】按钮、点占位按钮的命中区域是否准确，坐标是否偏移
-- [ ] 确认全屏下 34 号字的观感是否合适（偏大偏小都可调）
+      （占位按钮的回调会打印点击坐标，直接对照屏幕看）
+- [ ] 确认全屏下 40 号标题 / 18 号按钮字的观感是否合适（`gui.cpp` 里的
+      `kBigFontPx` / `kSmallFontPx`，或换成 34 号试试）
 - [ ] 若坐标偏移，写 `Coordinate Transformation Matrix` 校准
 - [ ] 决定是否需要一个极简窗口管理器（`matchbox-window-manager`、`openbox`），
       否则所有程序都只能全屏
-- [x] ~~引入 Xft + FreeType 让中文正常显示~~ —— **已完成**，板上实测字体加载成功
+- [ ] 量一下 LVGL 版的真实常驻内存，把第 5 节的估算值换成实测值
 - [ ] 给 `src/` 加自动源文件扫描（`file(GLOB ...)`），免得每次加文件都要改 CMakeLists
+- [ ] 有网时 `docker build -t firecontrol-armhf:bookworm .` 重建镜像
+      （Dockerfile 已去掉不再需要的 libxft/libfontconfig）；用旧镜像也能编

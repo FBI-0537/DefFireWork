@@ -141,19 +141,6 @@ const char *kSmallFontNames[] = {
     "sans:size=18",
 };
 
-XftFont *loadXftFont(Display *dpy, int scr, const char **names, int count, const char *what)
-{
-    for (int i = 0; i < count; i++) {
-        XftFont *f = XftFontOpenName(dpy, scr, names[i]);
-        if (f != nullptr) {
-            std::printf("  字体(%s): %s\n", what, names[i]);
-            return f;
-        }
-    }
-    std::fprintf(stderr, "警告: 找不到可用 Xft 字体 (%s), 相关文字将不显示\n", what);
-    return nullptr;
-}
-
 // UTF-8 -> Unicode 码点。返回写入的码点数, 0 表示空串。
 //
 // 需要自己解 UTF-8 的原因: XftDrawString32 收的是 FcChar32 数组, 而
@@ -184,6 +171,51 @@ int utf8ToCodepoints(const char *s, FcChar32 *out, int max_out)
         out[n++] = cp;
     }
     return n;
+}
+
+// 检查字体是否覆盖了文本里用到的所有字符。
+//
+// 为什么需要这个: XftFontOpenName 对**不存在的字体名不会返回 NULL** ——
+// fontconfig 会做替换(substitution), 返回一个替补字体。如果替补字体没有汉字
+// 字形, 中文就会画成方框(tofu), 而程序完全不知道自己拿到的是错字体。
+// 所以必须自己验证覆盖率, 不合格就试下一个候选。
+bool fontCoversText(Display *dpy, XftFont *font, const char *utf8)
+{
+    FcChar32 cps[256];
+    const int n = utf8ToCodepoints(utf8, cps, 256);
+    for (int i = 0; i < n; i++) {
+        if (!XftCharExists(dpy, font, cps[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 所有按钮文字里用到的字符 + 主标题, 作为"字体必须覆盖"的样例。
+// 新增按钮文字时这里也要跟着加, 否则可能选到不含新字符的字体。
+constexpr const char *kFontCoverageSample = "退出功能 1234halloworld";
+
+XftFont *loadXftFont(Display *dpy, int scr, const char **names, int count, const char *what)
+{
+    for (int i = 0; i < count; i++) {
+        XftFont *f = XftFontOpenName(dpy, scr, names[i]);
+        if (f == nullptr) {
+            continue;       // 真的打不开
+        }
+        if (fontCoversText(dpy, f, kFontCoverageSample)) {
+            std::printf("  字体(%s): %s  [已校验字形覆盖]\n", what, names[i]);
+            return f;
+        }
+        // 能打开但缺字形 —— 大概是被替换成了不含汉字的字体, 换下一个
+        std::printf("  字体(%s): %s  [缺字形, 跳过]\n", what, names[i]);
+        XftFontClose(dpy, f);
+    }
+    std::fprintf(stderr,
+                 "警告: 找不到能显示全部字符的字体 (%s)。\n"
+                 "      中文可能显示为方框。请安装中文字体, 例如:\n"
+                 "        Fedora:  sudo dnf install google-noto-sans-cjk-fonts\n"
+                 "        Debian:  sudo apt install fonts-wqy-zenhei\n", what);
+    return nullptr;
 }
 
 // 测量 UTF-8 串的像素宽度

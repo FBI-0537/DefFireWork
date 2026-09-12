@@ -83,12 +83,18 @@ endif()
 #
 #   WITH_GUI=AUTO (默认)
 #       原生构建   → 找得到 x11/freetype2 就编
-#       交叉编译   → 直接跳过 (普通 armhf 工具链里没有 X11/freetype 的 ARM 头文件和库)
+#       交叉编译   → 直接跳过 (裸交叉工具链里没有 X11/freetype 的 ARM 开发文件)
 #
 #   WITH_GUI=ON
-#       强制尝试。交叉编译用 armhf-toolchain 那套 Debian multiarch 镜像
-#       (Dockerfile 里已装 libx11-dev:armhf / libfreetype-dev:armhf):
-#           .\armhf-toolchain\build-armhf.ps1
+#       强制尝试。交叉编译的 GUI **必须**走 armhf-toolchain 的 Docker 环境
+#       (镜像里装了 armhf 版 libx11-dev / libfreetype-dev):
+#           ./armhf-toolchain/build-armhf.sh        # Linux / macOS
+#           .\armhf-toolchain\build-armhf.ps1       # Windows
+#       不要手工拼 cmake 命令 —— 那两个脚本会带上正确的 toolchain 文件与
+#       pkg-config 环境, 并给产物写工具链指纹。详见 armhf-toolchain/README.md
+#
+#       注: cmake/toolchain-armhf.cmake (Zig 版) 只用于**纯逻辑层与控制台程序**,
+#       它没有 X11/freetype, 用它开 WITH_GUI=ON 会在下面直接报错。
 #
 # 命名说明: 不能叫 halloworld, 上面那个控制台程序已经占了。
 # ---------------------------------------------------------------------------
@@ -184,8 +190,18 @@ else()
         if(IS_CROSS_BUILD)
             message(FATAL_ERROR
                 "交叉编译启用了 GUI (WITH_GUI=ON) 但${_why}。\n"
-                "要用装了 ARM 版 X11/freetype 开发包的交叉环境, 例如:\n"
-                "    .\\armhf-toolchain\\build-armhf.ps1")
+                "\n"
+                "交叉编译 GUI 必须用 armhf-toolchain 的 Docker 环境 —— 它在镜像里\n"
+                "装了 armhf 版 X11/freetype, 并配好了 pkg-config 路径:\n"
+                "\n"
+                "    ./armhf-toolchain/build-armhf.sh        # Linux / macOS\n"
+                "    .\\armhf-toolchain\\build-armhf.ps1       # Windows\n"
+                "\n"
+                "不要手工拼 cmake 命令: pkg-config 必须只查 armhf 的 .pc 文件\n"
+                "(见 armhf-toolchain/toolchain-docker-armhf.cmake), 漏了会链到 x86-64。\n"
+                "\n"
+                "另: 若你用的是 cmake/toolchain-armhf.cmake(Zig 版), 那是给纯逻辑层\n"
+                "与控制台程序用的, 它没有 X11/freetype —— 交叉编译 GUI 请改用上面的脚本。")
         else()
             message(WARNING
                 "找不到 x11 / freetype2 开发文件, 跳过 GUI 目标。\n"
@@ -209,6 +225,36 @@ if(BUILD_TESTING)
         add_test(NAME greeting COMMAND test_greeting)
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# 工具链指纹 —— 产物隔离
+#
+# 同一个 halloworld-gui 可能来自 Docker / Zig / 板上原生编译, 三者编译器与 libc
+# 都不同。把指纹写进构建目录, 有问题时第一眼就能确认来源; 指纹随产物一起
+# 拷到板上, 板上也能查 (见 armhf-toolchain/verify-on-board.sh)。
+#
+# 如果构建目录里已有**不同**工具链的指纹, 说明在复用别人的构建目录, 给出警告。
+# ---------------------------------------------------------------------------
+set(_fp_file "${CMAKE_BINARY_DIR}/TOOLCHAIN.txt")
+set(_fp_new "compiler   = ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}
+compiler_path = ${CMAKE_CXX_COMPILER}
+target     = ${CMAKE_SYSTEM_PROCESSOR}
+cross      = ${IS_CROSS_BUILD}
+gui        = ${HAVE_GUI}
+cmake      = ${CMAKE_VERSION}
+build_type = ${CMAKE_BUILD_TYPE}")
+
+if(EXISTS "${_fp_file}")
+    file(READ "${_fp_file}" _fp_old)
+    if(NOT _fp_old STREQUAL "${_fp_new}")
+        message(WARNING
+            "构建目录里的工具链指纹与当前配置不一致:\n"
+            "    ${_fp_file}\n"
+            "  可能在做交叉编译的目录里跑原生配置(或反之)。\n"
+            "  建议先删掉构建目录再配置, 避免混用不同工具链的目标文件。")
+    endif()
+endif()
+file(WRITE "${_fp_file}" "${_fp_new}\n")
 
 # ---------------------------------------------------------------------------
 # 构建信息

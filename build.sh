@@ -6,8 +6,8 @@
 #   ./build.sh run        原生构建后运行【控制台程序】(不开窗口)
 #   ./build.sh gui        原生构建后打开【GUI 窗口】(1024x600 窗口模式)
 #   ./build.sh gui-full   原生 GUI, 全屏
-#   ./build.sh armhf      交叉编译纯逻辑层 + 控制台程序 (无 GUI)
-#   ./build.sh gui-armhf  交叉编译 X11 GUI (需要 armhf-sysroot)
+#   ./build.sh armhf      交叉编译纯逻辑层 + 控制台程序 (Zig, 无 GUI)
+#   ./build.sh gui-armhf  交叉编译 GUI (Docker, 需 docker/podman)
 #   ./build.sh all        原生 + armhf
 #   ./build.sh clean      删除构建目录
 #   ./build.sh verify     只做 armhf 产物结构验证
@@ -152,52 +152,52 @@ do_clean() {
 }
 
 # ---------------------------------------------------------------------------
-# 交叉编译 X11 GUI
+# 交叉编译 GUI (armhf)
 #
-# 需要 ~/Code/armhf-sysroot 提供的 ARM 版 libX11 (sysroot)。
-# 这和 do_armhf 是两件事:
-#   do_armhf  → 纯逻辑层, 不需要外部库, Zig 单独就能编
-#   do_gui    → 需要 X11, 必须有 sysroot
+# 统一走 armhf-toolchain 的 Docker 环境 —— 环境由仓库里的 Dockerfile 定义,
+# 任何人构建结果一致, 产物带工具链指纹(TOOLCHAIN.txt), 便于隔离排查。
+#
+# 为什么不在这里直接拼 cmake 命令:
+#   GUI 需要 armhf 版 X11/freetype, 且 pkg-config 必须只查 armhf 的 .pc 文件。
+#   这些细节封在 armhf-toolchain/ 里, 外层只调它一个入口。
+#
+# 和 do_armhf 的区别:
+#   do_armhf  → 纯逻辑层 + 控制台, 用 Zig, 不需要外部库
+#   do_gui_armhf → GUI, 需要 X11/freetype, 走 Docker
 # ---------------------------------------------------------------------------
 do_gui_armhf() {
-    c_info "======== 交叉编译 X11 GUI (armhf) ========"
+    local script="$ROOT/armhf-toolchain/build-armhf.sh"
 
-    local sysroot="$HOME/Code/armhf-sysroot"
-    [[ -d "$sysroot/sysroot" ]] || {
-        c_err "✗ 找不到 X11 sysroot: $sysroot/sysroot"
-        c_err "  先建它:"
-        c_err "      cd ~/Code/armhf-sysroot"
-        c_err "      python3 scripts/fetch-packages.py"
-        c_err "      python3 scripts/make-sysroot.py"
+    if [ ! -x "$script" ]; then
+        c_err "✗ 找不到 $script"
         exit 1
-    }
+    fi
 
-    need_native   # 需要 cmake
+    if ! command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
+        c_err "✗ 交叉编译 GUI 需要 docker 或 podman"
+        c_err "    Fedora:  sudo dnf install podman"
+        c_err "    其它:    https://docs.docker.com/get-docker/"
+        c_err ""
+        c_err "  为什么需要容器: GUI 依赖 armhf 版 X11/freetype, 这套环境由"
+        c_err "  armhf-toolchain/Dockerfile 定义, 保证任何人构建结果一致。"
+        c_err "  详见 armhf-toolchain/README.md"
+        exit 1
+    fi
 
-    cmake -B "$GUI_ARMHF_DIR" -S . \
-          -DCMAKE_TOOLCHAIN_FILE="$sysroot/toolchain-armhf-x11.cmake" \
-          -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-          -DBUILD_TESTING=OFF \
-          -DWITH_GUI=ON
-
-    cmake --build "$GUI_ARMHF_DIR" -j "$JOBS"
+    c_info "======== 交叉编译 GUI (armhf), 走 Docker ========"
+    "$script" "$@"
 
     local exe="$GUI_ARMHF_DIR/halloworld-gui"
-    [[ -f "$exe" ]] || { c_err "✗ 没有产出 $exe"; exit 1; }
+    [ -f "$exe" ] || { c_err "✗ 没有产出 $exe"; exit 1; }
 
-    c_info "-------- 产物验证 --------"
-    LC_ALL=C file "$exe" | sed 's/^/    /'
-    echo "    体积: $(stat -c %s "$exe") 字节"
-    arm-linux-gnueabihf-readelf -h "$exe" \
-        | grep -E 'Class:|Machine:|Flags:' | sed 's/^/    /'
-    echo "    动态依赖:"
-    arm-linux-gnueabihf-readelf -d "$exe" 2>/dev/null \
-        | grep NEEDED | sed 's/^/      /'
+    if [ -f "$GUI_ARMHF_DIR/TOOLCHAIN.txt" ]; then
+        echo
+        c_info "-------- 工具链指纹 (产物隔离用) --------"
+        sed 's/^/    /' "$GUI_ARMHF_DIR/TOOLCHAIN.txt"
+    fi
 
-    c_ok "✓ 交叉编译完成: $exe"
     echo
-    echo "    拷到板子:  scp $exe root@<板子IP>:~/"
-    echo "    板上运行:  DISPLAY=:0 ./halloworld-gui"
+    echo "    上板前校验:  ./armhf-toolchain/verify-on-board.sh root@<板子IP>"
 }
 
 case "${1:-native}" in

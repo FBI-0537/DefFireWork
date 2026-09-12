@@ -66,7 +66,7 @@
 - [1. 项目构成](#1-项目构成)
 - [2. 开发环境](#2-开发环境)
 - [3. 交叉编译工具链](#3-交叉编译工具链)
-- [4. X11 交叉编译环境（armhf-sysroot）](#4-x11-交叉编译环境armhf-sysroot)
+- [4. 交叉编译环境（armhf-toolchain / Docker）](#4-交叉编译环境armhf-toolchain--docker)
 - [5. 目标板环境](#5-目标板环境)
 - [6. 构建与运行](#6-构建与运行)
 - [7. VS Code 配置](#7-vs-code-配置)
@@ -180,35 +180,62 @@ armhf-env
 
 ---
 
-## 4. X11 交叉编译环境（armhf-sysroot）
+## 4. 交叉编译环境（armhf-toolchain / Docker）
 
-**位置：`~/Code/armhf-sysroot/`**（独立于本项目，属于工具链）
+**统一入口：`armhf-toolchain/`** —— 环境由仓库里的 `Dockerfile` 定义，随代码走。
 
-这是让 X11 GUI 能交叉编译的关键。Zig 不带任何 X11 头文件，所以从 Debian
-拉了 armhf 的 libX11 开发包，解成一个 sysroot。
+```bash
+docker build -t firecontrol-armhf:bookworm armhf-toolchain/
+./armhf-toolchain/build-armhf.sh          # Linux / macOS（也支持 podman）
+.\armhf-toolchain\build-armhf.ps1         # Windows (Docker Desktop)
+```
+
+**为什么统一到 Docker**：在这之前 armhf 二进制可能来自三套不同环境
+（Fedora+Zig / Windows+Docker / 板上原生），编译器与 libc 都不同却产出**同名**文件，
+出问题时无法判断来源。现在环境由 Dockerfile 描述，任何人构建结果一致。
 
 | 文件 | 作用 |
 |---|---|
-| `scripts/fetch-packages.py` | 从 Debian 源拉 16 个 armhf `.deb`（含依赖递归解析） |
-| `scripts/make-sysroot.py` | 解包成 `sysroot/`（手工解 ar，Fedora 没有 `dpkg`） |
-| `armhf-pkg-config` | pkg-config 包装：只查 sysroot，补 `-I`/`-L` 前缀 |
-| `toolchain-armhf-x11.cmake` | CMake 工具链文件 |
-| `build-armhf.sh` | 独立构建脚本（不走 CMake 也能编） |
-| `cache/` | 下载的 `.deb`，约 15 MB |
-| `sysroot/` | 解包结果，约 8.8 MB |
+| `Dockerfile` | 基于 `debian:bookworm-slim`（与板子同版本），装 Debian 官方交叉编译器 + armhf 版 X11/freetype |
+| `toolchain-docker-armhf.cmake` | 容器内用的 CMake 工具链文件 |
+| `build-armhf.sh` / `.ps1` | 两个平台的构建脚本 |
+| `verify-on-board.sh` | **在板上**校验产物：架构、ABI、运行时依赖、字体、X server |
+| `README.md` | 完整说明（含隔离设计） |
 
-### 重建方法（换机器时需要）
+### 产物隔离
+
+每次构建写入 `build-armhf/TOOLCHAIN.txt`（工具链指纹），随产物一起拷到板上：
+
+```
+compiler   = GNU 12.2.0
+triplet    = arm-linux-gnueabihf
+cross      = TRUE
+```
+
+`CMakeLists.txt` 在 configure 时也会写这个文件；若构建目录里已有**不同**工具链的
+指纹会给出警告，避免把两种工具链的目标文件混在一起编。
+
+上板前建议先校验：
+
+```bash
+./armhf-toolchain/verify-on-board.sh root@<板子IP>
+```
+
+### 旧的 Zig + sysroot 路径（保留，但只用于纯逻辑层）
+
+`cmake/toolchain-armhf.cmake` + `~/Code/armhf-sysroot/`（**仓库外**，需自行重建）
+用 Zig 编译**纯逻辑层与控制台程序**，不需要 X11，速度很快。
+**它不编 GUI** —— GUI 依赖 armhf 版 X11/freetype，请用上面的 Docker 环境。
+
+`~/Code/armhf-sysroot/` 的重建方法：
 
 ```bash
 cd ~/Code/armhf-sysroot
-python3 scripts/fetch-packages.py    # 下载
-python3 scripts/make-sysroot.py      # 解包
+python3 scripts/fetch-packages.py    # 从 Debian 拉 armhf 的 .deb
+python3 scripts/make-sysroot.py      # 解包成 sysroot/
 ```
 
-### 版本对齐很重要
-
-拉的是 **Debian 12 bookworm** 的包，`libx11-6 = 2:1.8.4-2+deb12u2`
-—— **和板子上跑的版本一致**，ABI 不会错配。
+拉的是 **Debian 12 bookworm** 的包，与板子版本一致，ABI 不会错配。
 
 ---
 
@@ -286,7 +313,7 @@ LVGL 这条路的显示开销（**按源码算出来的，不是板上实测值*
 ./build.sh gui         # 原生构建后打开【GUI 窗口】(1024x600 窗口模式)
 ./build.sh gui-full    # 原生 GUI, 全屏
 ./build.sh armhf       # 交叉编译纯逻辑层 + 控制台程序 (无 GUI)
-./build.sh gui-armhf   # 交叉编译 X11 GUI (需要 armhf-sysroot)
+./build.sh gui-armhf   # 交叉编译 GUI (走 Docker, 需 docker/podman)
 ./build.sh all         # 原生 + armhf
 ./build.sh clean       # 删除构建目录
 ./build.sh verify      # 只做 armhf 产物结构验证
@@ -295,13 +322,20 @@ LVGL 这条路的显示开销（**按源码算出来的，不是板上实测值*
 **最常见的困惑**：`./build.sh run` 跑的是**控制台程序，不开窗口**。
 要看窗口用 `./build.sh gui`。
 
-**在 Windows 上**走 Docker 那套，不用 `build.sh`：
+**在 Windows 上**走 Docker 那套：
 
 ```powershell
-cd armhf-toolchain
-.\build-armhf.ps1                    # 默认: 交叉编译 GUI + 产物校验
-.\build-armhf.ps1 -Action console    # 只编控制台程序与逻辑库 (不含 GUI, 快)
-.\build-armhf.ps1 -Action shell      # 进容器手动操作
+.\armhf-toolchain\build-armhf.ps1              # 构建 (首次自动建镜像)
+.\armhf-toolchain\build-armhf.ps1 -Rebuild     # 先重建镜像
+.\armhf-toolchain\build-armhf.ps1 -Shell       # 进容器手动操作
+```
+
+Linux / macOS 对应：
+
+```bash
+./armhf-toolchain/build-armhf.sh
+./armhf-toolchain/build-armhf.sh --rebuild
+./armhf-toolchain/build-armhf.sh --shell
 ```
 
 ### 6.2 直接用 CMake
@@ -314,19 +348,17 @@ ctest --test-dir build --output-on-failure
 ./build/halloworld-gui --windowed      # 窗口模式
 ./build/halloworld-gui                 # 全屏
 
-# armhf 纯逻辑层（无 GUI）
+# armhf 纯逻辑层 + 控制台（无 GUI，用 Zig）
 cmake -B build-armhf -S . \
       -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armhf.cmake \
       -DBUILD_TESTING=OFF
 cmake --build build-armhf -j
 
-# armhf GUI（需要带 ARM 版 X11/freetype 的交叉环境）
-# 推荐直接用 armhf-toolchain/build-armhf.ps1（Docker）。它内部做的事等价于:
-cmake -B /out -S . \
-      -DCMAKE_TOOLCHAIN_FILE=/tc/toolchain-armhf-x11.cmake \
-      -DBUILD_TESTING=OFF -DWITH_GUI=ON
-cmake --build /out -j
-# 容器里: /work = 仓库(只读)、/tc = 工具链、/out = ../armhf-toolchain/Output
+# armhf GUI —— 不要手工拼命令
+#   需要 armhf 版 X11/freetype, 且 pkg-config 必须只查 armhf 的 .pc 文件。
+#   这些封在 armhf-toolchain/ 里, 用它的入口:
+./armhf-toolchain/build-armhf.sh        # Linux / macOS
+.\armhf-toolchain\build-armhf.ps1       # Windows
 ```
 
 GUI 相关的可调项（都是 cache 变量）：
@@ -444,8 +476,13 @@ GUI 相关的三个任务：
 交叉编译时导出的是 armhf 那套参数（`build-armhf/compile_commands.json`），
 里面也包含 LVGL 的头文件路径 —— 改 GUI 代码时用它补全更准。
 
-> ⚠️ 这些任务都用 `bash`，是针对 Linux 开发机写的。在 Windows 上构建走
-> `armhf-toolchain/build-armhf.ps1`（Docker），任务列表还没跟着改。
+> ⚠️ 这些任务都用 `bash`，是针对 Linux 开发机写的。
+> Windows 上用 `armhf-toolchain/build-armhf.ps1`（Docker）；
+> 两边共用同一份 `armhf-toolchain/Dockerfile`，产出可复现。
+>
+> ⚠️ `CMake: 构建 GUI armhf (交叉编译)` 这个任务目前仍走旧的 Zig + sysroot
+> 路径（`~/Code/armhf-sysroot`），它**没有 X11/freetype，编不了 LVGL GUI**。
+> 交叉编译 GUI 请直接在终端跑 `./build.sh gui-armhf`（内部走 Docker）。
 
 ---
 
@@ -459,7 +496,14 @@ FireControlApp/
 ├── build.sh                       便捷构建封装（Linux 开发机）
 ├── .gitignore
 ├── cmake/
-│   └── toolchain-armhf.cmake      armhf 工具链（纯逻辑层，无 X11）
+│   └── toolchain-armhf.cmake      armhf 工具链（Zig，纯逻辑层，无 X11）
+├── armhf-toolchain/               ★ 交叉编译 GUI 的唯一入口（Docker）
+│   ├── Dockerfile                 环境定义（bookworm-slim + 交叉编译器 + armhf X11/freetype）
+│   ├── toolchain-docker-armhf.cmake   容器内用的 CMake 工具链文件
+│   ├── build-armhf.sh             Linux/macOS 构建（docker 或 podman）
+│   ├── build-armhf.ps1            Windows 构建（Docker Desktop）
+│   ├── verify-on-board.sh         在板上校验产物（架构/ABI/依赖/字体/X）
+│   └── README.md                  含隔离设计的完整说明
 ├── src/
 │   ├── greeting.h                 纯逻辑层接口
 │   ├── greeting.cpp               纯逻辑层实现 → libfirecontrol.a
@@ -479,8 +523,8 @@ FireControlApp/
 
 ```
 build/                原生 x86-64
-build-armhf/          armhf 纯逻辑层 + 控制台
-build-gui-armhf/      armhf X11 GUI
+build-armhf/          armhf 纯逻辑层 + 控制台（Zig，也在 Docker 构建时复用）
+build-gui-armhf/      armhf GUI（Docker 环境的产物，含 TOOLCHAIN.txt 指纹）
 build-debug/          Debug 构建
 ```
 

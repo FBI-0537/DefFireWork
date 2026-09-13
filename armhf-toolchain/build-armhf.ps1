@@ -1,4 +1,4 @@
-# build-armhf.ps1 — 用 Docker 交叉编译 FireControlApp 到 armhf (Windows)
+﻿# build-armhf.ps1 — 用 Docker 交叉编译 FireControlApp 到 armhf (Windows)
 #
 # 用法 (PowerShell, 在仓库根目录或任意位置):
 #   .\armhf-toolchain\build-armhf.ps1              构建
@@ -15,7 +15,11 @@ param(
     [string]$Image = "firecontrol-armhf:bookworm"
 )
 
-$ErrorActionPreference = "Stop"
+# PowerShell 5.1 的坑: 原生命令(docker / cmake)往 stderr 写任何东西 —— 构建进度、
+# pull 的层信息、gcc 警告 —— 在 $ErrorActionPreference='Stop' 下都会被当成终止
+# 错误, 于是第一次 docker build 就会莫名其妙中断。
+# 所以这里用 Continue, 成败一律看 $LASTEXITCODE（下面每处都检查了）。
+$ErrorActionPreference = "Continue"
 
 function Info($m) { Write-Host $m -ForegroundColor Cyan }
 function Ok($m)   { Write-Host $m -ForegroundColor Green }
@@ -98,7 +102,12 @@ $stamp = @(
     "host_runtime = docker-desktop (windows)"
     "built_local  = $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
 )
-$stamp | Set-Content -Path (Join-Path $BuildDir "TOOLCHAIN.txt") -Encoding UTF8
+# 不用 Set-Content -Encoding UTF8: PowerShell 5.1 会写成"带 BOM 的 UTF-8"且用 CRLF。
+# 这个文件要跟着产物上 Linux / 板子, 所以显式写成 无 BOM + LF。
+[System.IO.File]::WriteAllText(
+    (Join-Path $BuildDir "TOOLCHAIN.txt"),
+    ($stamp -join "`n") + "`n",
+    (New-Object System.Text.UTF8Encoding $false))
 $stamp | ForEach-Object { "    $_" }
 
 # --- 结果 ---

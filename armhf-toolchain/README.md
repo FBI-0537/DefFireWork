@@ -180,6 +180,31 @@ mkdir: cannot create directory '/work/build-armhf/CMakeFiles': Permission denied
 - **SELinux**：脚本用 `--security-opt label=disable` 而非 `:Z`。后者会**永久改写
   宿主目录的 SELinux 标签**，且 `restorecon` 会以 "customized by admin" 为由
   拒绝恢复（实测踩到过）。前者只对本容器关闭隔离，不动宿主标签。
+- **已在 Windows + Docker Desktop 上实测通过**（2026-09-12，FBI-0537）。
+  首次实测暴露的几个"必然失败"问题及修法：
+
+  | 问题 | 修法 |
+  |---|---|
+  | 自检缺 freetype 的 include 路径 | 改用 `pkg-config --cflags --libs x11 freetype2`，不再手写 `-I` |
+  | 自检用了 slim 镜像里没有的 `file` | 改用 `readelf`（binutils 自带） |
+  | `deb.debian.org` 间歇性断连（下到一半断） | 默认源换成清华 TUNA，见下 |
+  | `build-armhf.ps1` 缺 UTF-8 BOM，PS 5.1 按 ANSI 读导致中文语法崩溃 | 加 BOM |
+  | `$ErrorActionPreference='Stop'` 把原生命令的 stderr 当终止错误 | 改 `Continue`，成败看 `$LASTEXITCODE` |
+  | `Set-Content -Encoding UTF8` 在 PS 5.1 写出 BOM+CRLF | 改 `[System.IO.File]::WriteAllText` 显式无 BOM + LF |
+
+- **默认软件源是清华 TUNA** —— `deb.debian.org` 在部分网络下会"前 10 MB 能下、
+  后面直接连不上"，导致镜像构建随机失败。要用官方源：
+
+  ```bash
+  docker build --build-arg APT_MIRROR=deb.debian.org \
+               -t firecontrol-armhf:bookworm armhf-toolchain/
+  ```
+
+- **Windows 检出注意**：仓库根的 `.gitattributes` 已把 `*.sh` / `Dockerfile` 锁成 LF。
+  Git for Windows 默认 `core.autocrlf=true` 会把它们检出成 CRLF，那样的 `.sh` 拿到
+  板子或容器里执行会报 `bad interpreter: No such file or directory`。
+  **已经用 CRLF 检出的工作区需要重新检出**才会变成 LF：
+  `git rm --cached -r . && git reset --hard`（或直接重新 clone）。
 - 旧的 `cmake/toolchain-armhf.cmake`（Zig 版，编译**纯逻辑层与控制台程序**）
   **仍然保留** —— 它不需要 X11，用 Zig 编很快，作为轻量路径继续可用。
   只有 **GUI** 必须走本目录的 Docker 环境。

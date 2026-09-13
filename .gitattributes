@@ -1,0 +1,17 @@
+# 行尾规范化
+#
+# 背景: Git for Windows 的默认配置是 core.autocrlf=true, checkout 时会把文本文件
+# 转成 CRLF。对 shell 脚本来说这不是"难看"而是"跑不了" —— 实测本仓库在 Windows 上
+# 检出后 armhf-toolchain/*.sh 就是 CRLF, 拿到板子或容器里执行会报:
+#     /usr/bin/env bash^M: bad interpreter: No such file or directory
+#     或  $'\r': command not found
+#
+# 这里把必须走 LF 的文件显式钉死, 与开发者本机的 autocrlf 设置无关。
+# 注意: 改这个文件后, 已经用 CRLF 检出的工作区需要重新检出才会变成 LF
+#       (git rm --cached -r . && git reset --hard, 或重新 clone)。
+
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+
+# 本文件自己也锁 LF: 它一旦被转成 CRLF, 上面的规则可能整份失效。
+.gitattributes  text eol=lf

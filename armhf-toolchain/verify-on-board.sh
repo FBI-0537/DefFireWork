@@ -13,7 +13,10 @@
 #   ./armhf-toolchain/verify-on-board.sh root@板子IP build-armhf/halloworld-gui
 #
 # 也可以把本脚本拷到板上直接跑:
-#   scp verify-on-board.sh root@板子:~/ && ssh root@板子 'bash verify-on-board.sh ./halloworld-gui'
+#   scp verify-on-board.sh 板子:~/
+#   ssh 板子 'bash verify-on-board.sh ./halloworld-gui ./TOOLCHAIN.txt'
+#   (第一个参数若是"存在的文件", 自动进入就地检查模式 —— 不必手写空串)
+#   等价写法: bash verify-on-board.sh "" ./halloworld-gui ./TOOLCHAIN.txt
 
 set -uo pipefail
 
@@ -34,6 +37,28 @@ read -r -d '' REMOTE_CHECK <<'REMOTE' || true
 EXE="${1:-./halloworld-gui}"
 FP="${2:-}"
 fail=0
+
+# --- 依赖工具自检 -----------------------------------------------------------
+# 缺工具时后面的检查会**静默跳过**, 然后仍然打印"与本板匹配"。
+# 最危险的是"运行时依赖是否齐全": readelf 不在时它一个库都不查, 结果是空的,
+# 看着就像"全都没问题"。所以缺工具必须在这里显式失败, 宁可误报也不能漏报。
+READELF=""
+for c in readelf arm-linux-gnueabihf-readelf; do
+    if command -v "$c" >/dev/null 2>&1; then READELF="$c"; break; fi
+done
+
+for tool in file ldconfig; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "  ✗ 板上缺 $tool —— 检查结果不可靠"
+        echo "      装上: apt install $tool"
+        fail=1
+    fi
+done
+if [ -z "$READELF" ]; then
+    echo "  ✗ 板上缺 readelf —— 无法检查 ABI 与运行时依赖"
+    echo "      装上: apt install binutils"
+    fail=1
+fi
 
 echo "  --- 板子环境 ---"
 echo "    架构      : $(uname -m)"
@@ -60,9 +85,9 @@ if file "$EXE" 2>/dev/null | grep -qi 'ARM'; then
 else
     echo "    ✗ 不是 ARM（可能是 x86-64 误传上来了）"; fail=1
 fi
-if LC_ALL=C readelf -h "$EXE" 2>/dev/null | grep -qi 'hard-float'; then
+if [ -n "$READELF" ] && LC_ALL=C "$READELF" -h "$EXE" 2>/dev/null | grep -qi 'hard-float'; then
     echo "    ✓ 硬浮点 ABI (ELF header Flags)"
-elif LC_ALL=C readelf -A "$EXE" 2>/dev/null | grep -qiE 'Tag_ABI_VFP_args.*VFP'; then
+elif [ -n "$READELF" ] && LC_ALL=C "$READELF" -A "$EXE" 2>/dev/null | grep -qiE 'Tag_ABI_VFP_args.*VFP'; then
     echo "    ✓ 硬浮点 ABI (.ARM.attributes)"
 else
     echo "    ⚠ 没检出硬浮点标记（板子是 hard-float，可能跑不起来）"
@@ -71,7 +96,7 @@ fi
 echo
 echo "  --- 运行时依赖是否齐全 ---"
 missing=0
-for lib in $(LC_ALL=C readelf -d "$EXE" 2>/dev/null | awk '/NEEDED/{gsub(/[][]/,"");print $NF}'); do
+for lib in $(LC_ALL=C "$READELF" -d "$EXE" 2>/dev/null | awk '/NEEDED/{gsub(/[][]/,"");print $NF}'); do
     if ldconfig -p 2>/dev/null | grep -q "$lib"; then
         echo "    ✓ $lib"
     else
@@ -129,13 +154,24 @@ exit $fail
 REMOTE
 
 # ---------------------------------------------------------------------------
-# 无参数(或只给产物) + 在板上直接跑 → 就地执行检查
-#   用法: verify-on-board.sh "" <产物路径> [指纹文件]
-#   注意指纹是 $3: $1 是 HOST(留空), $2 是产物路径
+# 在板上就地跑 → 直接执行检查, 不走 ssh
+#
+#   两种写法都支持:
+#     verify-on-board.sh ./halloworld-gui ./TOOLCHAIN.txt
+#     verify-on-board.sh "" ./halloworld-gui ./TOOLCHAIN.txt
+#   前一种的 $1 是个**存在的文件**, 说明它不是要 ssh 的目标主机 ——
+#   否则会去 ssh 一个叫 "./halloworld-gui" 的主机名而失败。
 # ---------------------------------------------------------------------------
+FP_ARG="${3:-}"
+if [ -n "$HOST" ] && [ -e "$HOST" ]; then
+    LOCAL_EXE="$HOST"
+    FP_ARG="${2:-}"
+    HOST=""
+fi
+
 if [ -z "$HOST" ]; then
     c_info "=== 本地(on-board)模式 ==="
-    exec bash -c "$REMOTE_CHECK" _ "$LOCAL_EXE" "${3:-}"
+    exec bash -c "$REMOTE_CHECK" _ "$LOCAL_EXE" "$FP_ARG"
 fi
 
 # ---------------------------------------------------------------------------

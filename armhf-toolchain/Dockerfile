@@ -24,11 +24,15 @@
 #   ./armhf-toolchain/build-armhf.sh          # Linux / macOS
 #   .\armhf-toolchain\build-armhf.ps1         # Windows (Docker Desktop)
 #
-# ⚠️ 状态说明
-#   本文件在编写时**未能在作者的开发机上实测**（该机无法访问 docker.io 拉取
-#   debian 基础镜像）。语法与包名均已核对，但请以第一次 docker build 的结果为准。
-#   构建结束后镜像内的自检脚本会编译一个含 X11 + freetype 的测试程序，
-#   自检失败会让 build 直接失败 —— 所以"构建成功"本身就意味着工具链可用。
+# 状态
+#   已在 **Windows + Docker Desktop** 上实测通过（2026-09-12，FBI-0537）。
+#   构建结束后镜像内的自检脚本会编译一个含 X11 + freetype 的探针程序并校验
+#   硬浮点 ABI，自检失败会让 build 直接失败 —— 所以"构建成功"就意味着工具链可用。
+#
+#   首次实测修掉了三个会让构建**必然失败**的问题（下面各标注了「实测修复」）:
+#     1. 自检没把 pkg-config 的 -I/usr/include/freetype2 带进去 → ft2build.h 找不到
+#     2. 自检用了 file，而 debian:bookworm-slim 里没有这个包
+#     3. deb.debian.org(Fastly) 会"下到一半断掉" → 默认源换成清华 TUNA
 
 # 基础镜像可覆盖 —— 网络访问不了 docker.io 时改用镜像站:
 #     docker build --build-arg BASE=docker.m.daocloud.io/library/debian:bookworm-slim \
@@ -39,6 +43,24 @@ FROM ${BASE}
 # 非交互式 apt，避免构建时卡在配置界面
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
+
+# ---------------------------------------------------------------------------
+# 0) 软件源
+#
+# deb.debian.org (Fastly) 在部分网络下会间歇性连不上, 实测到过:
+#     E: Failed to fetch http://deb.debian.org/debian/pool/.../libx11-dev_...deb
+#        Unable to connect to deb.debian.org:80 [IP: 28.0.0.12 80]
+# 表现是"前 10 MB 能下来, 后面直接断", 镜像构建随机失败。
+# 默认换成清华 TUNA(国内可达性好)。要用官方源:
+#     docker build --build-arg APT_MIRROR=deb.debian.org \
+#                  -t firecontrol-armhf:bookworm armhf-toolchain/
+# ---------------------------------------------------------------------------
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
+RUN set -eux; \
+    if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    grep -E '^URIs:' /etc/apt/sources.list.d/debian.sources
 
 # ---------------------------------------------------------------------------
 # 1) 交叉编译器 + 构建工具
@@ -83,12 +105,17 @@ ENV PKG_CONFIG_SYSROOT_DIR=/
 #    构建期就把"能不能交叉编译出带 X11 + freetype 的 armhf 程序"验掉。
 #    自检不过 → 镜像构建失败，不会留一个看似可用实则残缺的环境。
 #
-#    三个坑(构建期逐个抓出来的, 留着注释免得后人重犯):
-#      a) freetype 头文件在 /usr/include/freetype2, 必须显式 -I,
-#         否则报 ft2build.h: No such file or directory
-#      b) 不能用 `file` 命令 —— bookworm-slim 没装它。改用 readelf(binutils 自带),
-#         直接读 ELF 头反而更准: 一次确认 32 位 + ARM + 硬浮点 ABI
-#      c) 这段刻意**不用任何 shell 变量**: Dockerfile 的 RUN 里 `$` 会被构建器
+#    四个坑(构建期逐个抓出来的, 留着注释免得后人重犯):
+#      a) 用 pkg-config 取 flags, 不要手写 -I/usr/include/freetype2。
+#         pkg-config 会自动带上 freetype2 的 include 路径;
+#         手写的话换 Debian 版本/包布局就可能失效。
+#      b) 断言 pkg-config 的 -L 里必须含 arm-linux-gnueabihf ——
+#         万一 PKG_CONFIG_LIBDIR 配错命中了宿主的 x86-64 .pc, 链接期会链错架构,
+#         而那种错误在表面上看起来是"编译成功"。这条断言把静默错链变成显式失败。
+#      c) 不用 `file` 命令 —— bookworm-slim 没装它, 没必要为自检多装一个包。
+#         readelf(binutils 自带) 直接读 ELF 头反而更准:
+#         一次确认 Class=ELF32 / Machine=ARM / hard-float ABI。
+#      d) 这段刻意**不用任何 shell 变量**: Dockerfile 的 RUN 里 `$` 会被构建器
 #         先做变量替换, `$$` 在不同构建器(podman/docker)下行为不一致 ——
 #         实测 podman 把 `$$(cmd)` 变成了 PID 拼接。改成直接管道, 无转义问题。
 # ---------------------------------------------------------------------------
@@ -102,8 +129,10 @@ RUN set -eux; \
       '    FT_Library lib; FT_Init_FreeType(&lib);' \
       '    return 0;' \
       '}' > /tmp/probe.c; \
-    arm-linux-gnueabihf-gcc -O2 -I/usr/include/freetype2 \
-        /tmp/probe.c -o /tmp/probe -lX11 -lfreetype; \
+    pkg-config --libs x11 freetype2 | grep -q 'arm-linux-gnueabihf' \
+        || { echo "FAIL: pkg-config 的库路径不含 arm-linux-gnueabihf —— 可能命中了宿主 x86-64 的 .pc"; exit 1; }; \
+    arm-linux-gnueabihf-gcc -O2 /tmp/probe.c -o /tmp/probe \
+        $(pkg-config --cflags --libs x11 freetype2); \
     arm-linux-gnueabihf-readelf -h /tmp/probe | grep -E 'Class:|Machine:|Flags:' | sed 's/^/    /'; \
     arm-linux-gnueabihf-readelf -h /tmp/probe | grep -q 'ELF32'          || { echo "FAIL: 不是 32 位 ELF"; exit 1; }; \
     arm-linux-gnueabihf-readelf -h /tmp/probe | grep -q 'Machine:.*ARM'  || { echo "FAIL: 不是 ARM"; exit 1; }; \

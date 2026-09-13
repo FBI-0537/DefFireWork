@@ -53,8 +53,29 @@ constexpr int kBoardWidth = 1024;
 constexpr int kBoardHeight = 600;
 
 // 字号 (像素)
-constexpr uint32_t kBigFontPx = 40;
-constexpr uint32_t kSmallFontPx = 18;
+constexpr uint32_t kBigFontPx = 40;     // 主标题
+constexpr uint32_t kSmallFontPx = 18;   // 标题栏文字 / 按钮标签
+constexpr uint32_t kStatusFontPx = 16;  // 状态说明这类"次要小字"
+
+// ---------------------------------------------------------------------------
+// 配色: 深色工业简约风
+//
+// 全部集中在这里 —— 控件代码里不出现颜色字面量, 想换风格只改这一段。
+// 取值是按"触摸屏 + 机房/车间环境"挑的:
+//   底压到近黑、文字提到近白 => 强光下也看得清, 夜间不刺眼;
+//   强调色(安全琥珀)只出现在少数几个地方: 标题左侧竖条、主标题下划线、
+//   状态灯之外的按下态描边 —— 目的是"一眼能找到当前可操作的位置"。
+// ---------------------------------------------------------------------------
+constexpr uint32_t kColBg         = 0x121417;  // 屏幕底
+constexpr uint32_t kColPanel      = 0x1A1D21;  // 顶部标题栏 / 底部操作栏
+constexpr uint32_t kColSurface    = 0x23272E;  // 按钮表面
+constexpr uint32_t kColSeparator  = 0x2E343B;  // 描边 / 分隔线
+constexpr uint32_t kColDividerDim = 0x24282E;  // 未实现按钮的描边(压暗)
+constexpr uint32_t kColPressed    = 0x30363E;  // 按下态底色
+constexpr uint32_t kColText       = 0xE6E8EA;  // 主文字
+constexpr uint32_t kColTextDim    = 0x8A9199;  // 次要文字 / 未实现按钮
+constexpr uint32_t kColAccent     = 0xFFB020;  // 强调色 (安全琥珀)
+constexpr uint32_t kColOk         = 0x35C46A;  // 状态灯: 就绪/运行中
 
 // 启动后这段时间内的点击一律忽略。窗口刚映射时可能收到启动瞬间遗留的
 // 杂散 ButtonPress, 不挡一下会"一启动就触发某个按钮"。
@@ -173,6 +194,7 @@ constexpr ButtonSpec kButtons[kNumButtons] = {
 lv_display_t *g_disp = nullptr;
 lv_font_t *g_font_big = nullptr;
 lv_font_t *g_font_small = nullptr;
+lv_font_t *g_font_status = nullptr;
 
 uint32_t g_start_tick = 0;
 bool g_quit = false;
@@ -268,30 +290,56 @@ void onDisplayDeleted(lv_event_t *e)
 
 // ---------------------------------------------------------------------------
 // 界面
+//
+// 三段式工业面板: 顶部标题栏 (品牌 + 状态灯 + 退出) / 中间内容区 / 底部操作栏。
+// 颜色一律取自上表的调色板, 控件代码里不出现颜色字面量;
+// 布局用 flex, 换屏幕尺寸或改按钮数量都不用改坐标。
 // ---------------------------------------------------------------------------
+
+// 纯布局用的"素容器": 透明、无描边、不滚动、无内边距
+lv_obj_t *createPane(lv_obj_t *parent)
+{
+    lv_obj_t *pane = lv_obj_create(parent);
+    lv_obj_remove_flag(pane, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(pane, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(pane, 0, 0);
+    lv_obj_set_style_radius(pane, 0, 0);
+    lv_obj_set_style_pad_all(pane, 0, 0);
+    lv_obj_set_style_shadow_width(pane, 0, 0);  // 主题给容器带了卡片样式, 阴影一律去掉
+    return pane;
+}
+
+// 顶栏/底栏的公共外观: 深色底 + 靠内侧一条 1px 分隔线
+lv_obj_t *createBar(lv_obj_t *parent, int w, int h, lv_border_side_t side)
+{
+    lv_obj_t *bar = createPane(parent);
+    lv_obj_set_size(bar, w, h);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(kColPanel), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(bar, 1, 0);
+    lv_obj_set_style_border_side(bar, side, 0);
+    lv_obj_set_style_border_color(bar, lv_color_hex(kColSeparator), 0);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    return bar;
+}
+
 void applyButtonSkin(lv_obj_t *btn, bool active)
 {
-    // 白色底 + 1 像素黑边的扁平样式 (不跟随主题的圆角/阴影)
-    lv_obj_set_style_radius(btn, 0, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(btn, 4, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-    lv_obj_set_style_text_color(btn, lv_color_black(), 0);
-    if (g_font_small != nullptr) {
-        lv_obj_set_style_text_font(btn, g_font_small, 0);
-    }
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 
-    // 触摸反馈: 按下时底色压深, 免得手指按下去没有任何回应
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0xDDDDDD), LV_STATE_PRESSED);
+    // 已实现的按钮: 有实体面 + 常规描边; 未实现的压暗成"底", 一眼能看出还没做
+    lv_obj_set_style_bg_color(btn, lv_color_hex(active ? kColSurface : kColBg), 0);
+    lv_obj_set_style_border_color(btn,
+                                  lv_color_hex(active ? kColSeparator : kColDividerDim), 0);
 
-    // 占位按钮再加一圈 outline, 画成双层边框, 视觉上区分"还没做"
-    if (!active) {
-        lv_obj_set_style_outline_width(btn, 1, 0);
-        lv_obj_set_style_outline_pad(btn, 2, 0);
-        lv_obj_set_style_outline_color(btn, lv_color_black(), 0);
-    }
+    // 触摸反馈: 底色抬一档 + 描边点亮成强调色 —— 手指按下去要立刻有回应
+    lv_obj_set_style_bg_color(btn, lv_color_hex(kColPressed), LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, lv_color_hex(kColAccent), LV_STATE_PRESSED);
 }
 
 lv_obj_t *createButton(lv_obj_t *parent, const ButtonSpec &spec, lv_event_cb_t on_click)
@@ -305,95 +353,170 @@ lv_obj_t *createButton(lv_obj_t *parent, const ButtonSpec &spec, lv_event_cb_t o
 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, spec.label);
+    // 颜色显式设在标签上: 主题对 label 类有自己的一套配色, 靠父对象继承不保险
+    lv_obj_set_style_text_color(label,
+                                lv_color_hex(spec.active ? kColText : kColTextDim), 0);
+    if (g_font_small != nullptr) {
+        lv_obj_set_style_text_font(label, g_font_small, 0);
+    }
     lv_obj_center(label);
     return btn;
+}
+
+// 顶部标题栏: 左 = 品牌(强调色竖条 + 名字), 中 = 状态灯, 右 = 退出
+void buildHeader(lv_obj_t *scr, int win_w, int bar_h, int margin)
+{
+    lv_obj_t *bar = createBar(scr, win_w, bar_h, LV_BORDER_SIDE_BOTTOM);
+    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_pad_hor(bar, margin, 0);
+
+    // --- 左: 品牌 ---
+    lv_obj_t *brand = createPane(bar);
+    lv_obj_set_size(brand, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(brand, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(brand, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(brand, 10, 0);
+
+    lv_obj_t *tick = createPane(brand);
+    lv_obj_set_size(tick, 3, 18);
+    lv_obj_set_style_bg_color(tick, lv_color_hex(kColAccent), 0);
+    lv_obj_set_style_bg_opa(tick, LV_OPA_COVER, 0);
+
+    lv_obj_t *title = lv_label_create(brand);
+    lv_label_set_text(title, kTitle);
+    lv_obj_set_style_text_color(title, lv_color_hex(kColText), 0);
+    lv_obj_set_style_text_letter_space(title, 1, 0);
+    if (g_font_small != nullptr) {
+        lv_obj_set_style_text_font(title, g_font_small, 0);
+    }
+
+    // --- 中: 状态灯 ---
+    // 现在只表示"程序在跑"。以后接上传感器/联动状态时, 改这里的文字和灯色即可。
+    lv_obj_t *state = createPane(bar);
+    lv_obj_set_size(state, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(state, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(state, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(state, 8, 0);
+
+    lv_obj_t *led = createPane(state);
+    lv_obj_set_size(led, 10, 10);
+    lv_obj_set_style_radius(led, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(led, lv_color_hex(kColOk), 0);
+    lv_obj_set_style_bg_opa(led, LV_OPA_COVER, 0);
+    lv_obj_set_style_shadow_width(led, 8, 0);  // 一点辉光, 让灯真的"亮"起来
+    lv_obj_set_style_shadow_color(led, lv_color_hex(kColOk), 0);
+    lv_obj_set_style_shadow_opa(led, LV_OPA_50, 0);
+
+    lv_obj_t *state_text = lv_label_create(state);
+    lv_label_set_text(state_text, "运行中");
+    lv_obj_set_style_text_color(state_text, lv_color_hex(kColTextDim), 0);
+    if (g_font_status != nullptr) {
+        lv_obj_set_style_text_font(state_text, g_font_status, 0);
+    }
+
+    // --- 右: 退出 ---
+    lv_obj_t *quit_btn = createButton(bar, kButtons[0], onClickQuit);
+    lv_obj_set_size(quit_btn, pct(win_w, 9), bar_h - 26);
+}
+
+// 中间内容区: 主标题 + 一条强调色短线
+void buildContent(lv_obj_t *scr, int win_w, int top, int h)
+{
+    lv_obj_t *content = createPane(scr);
+    lv_obj_set_size(content, win_w, h);
+    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, top);
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(content, 14, 0);
+
+    lv_obj_t *title = lv_label_create(content);
+    lv_label_set_text(title, kText);
+    lv_obj_set_style_text_color(title, lv_color_hex(kColText), 0);
+    lv_obj_set_style_text_letter_space(title, 3, 0);
+    if (g_font_big != nullptr) {
+        lv_obj_set_style_text_font(title, g_font_big, 0);
+    }
+
+    // 装饰用的强调色短线: 不承载信息, 只是把视线钉在标题上
+    lv_obj_t *rule = createPane(content);
+    lv_obj_set_size(rule, 72, 3);
+    lv_obj_set_style_bg_color(rule, lv_color_hex(kColAccent), 0);
+    lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
+}
+
+// 底部操作栏: 深色面板 + 顶边分隔线; 功能按钮按 2 行 × 4 个均分。
+//
+// 8 个按钮排一行时每个只有 ~125 px, 中文标签会被挤到换行/截断。改成 2 行后
+// 每个约 243 px, 手指点着也宽裕 (触摸目标建议 ≥ 48 px 见方, 高度由 btn_h 保证)。
+//
+// 外层竖直 flex、每行横向 flex 均分 —— 加按钮只改 kButtons 表, 布局自动重排,
+// kPerRow 是唯一的"每行几个"参数。
+void buildFooter(lv_obj_t *scr, int win_w, int btn_h, int margin)
+{
+    constexpr int kPerRow = 4;
+    constexpr int kNumRows = (kNumButtons - 1 + kPerRow - 1) / kPerRow;  // 向上取整
+    static_assert(kNumRows >= 1, "至少要有 1 行按钮");
+
+    const int row_gap = btn_h / 3;  // 行间距, 随按钮高度缩放
+    const int grid_w = win_w - 2 * margin;
+    const int bar_h = kNumRows * btn_h + (kNumRows - 1) * row_gap + 2 * margin;
+
+    lv_obj_t *bar = createBar(scr, win_w, bar_h, LV_BORDER_SIDE_TOP);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_pad_all(bar, margin, 0);
+    lv_obj_set_style_pad_row(bar, row_gap, 0);
+    // createBar 默认是横向 flex, 这里要竖直排两行
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    for (int r = 0; r < kNumRows; r++) {
+        lv_obj_t *row = createPane(bar);
+        lv_obj_set_size(row, grid_w, btn_h);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, margin, 0);
+
+        // 本轮要放的表项: 跳过 [0] (退出按钮在顶栏), 每行放 kPerRow 个。
+        const int first = 1 + r * kPerRow;
+        const int last = (first + kPerRow < kNumButtons) ? (first + kPerRow) : kNumButtons;
+        for (int i = first; i < last; i++) {
+            lv_obj_t *btn = createButton(row, kButtons[i], onAction);
+            lv_obj_set_height(btn, btn_h);
+            lv_obj_set_flex_grow(btn, 1);
+        }
+    }
 }
 
 void buildUi(int win_w, int win_h)
 {
     lv_obj_t *scr = lv_screen_active();
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(scr, lv_color_hex(kColBg), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(scr, 0, 0);
 
-    // --- 主标题: 屏幕正中 ---
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, kText);
-    lv_obj_set_style_text_color(title, lv_color_black(), 0);
-    if (g_font_big != nullptr) {
-        lv_obj_set_style_text_font(title, g_font_big, 0);
-    }
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
-
-    // --- 尺寸: 触摸屏上按钮不能太小, 手指触点约 40~50 px ---
-    // 取屏高的 9%, 限制在 36..64 像素。
-    int bh = pct(win_h, 9);
-    if (bh < 36) {
-        bh = 36;
-    }
-    if (bh > 64) {
-        bh = 64;
-    }
     const int margin = pct(win_w, 1);
 
-    // --- 右上角退出按钮 ---
-    lv_obj_t *quit_btn = createButton(scr, kButtons[0], onClickQuit);
-    lv_obj_set_size(quit_btn, pct(win_w, 8), bh);
-    lv_obj_align(quit_btn, LV_ALIGN_TOP_RIGHT, -margin, margin);
-
-    // --- 底部按钮: 2 行 × 4 个 ---
-    //
-    // 8 个按钮排一行时每个只有 125 px, 中文标签会被挤到换行/截断。改成 2 行,
-    // 每个约 243 px, 手指点着也宽裕 (触摸目标建议 ≥ 48 px 见方, 高度由 bh 保证)。
-    //
-    // 外层用 flex 竖直排列, 每行还是 flex 横向均分 —— 加按钮只改 kButtons 表,
-    // 布局按数量自动重排: kPerRow 是唯一的"每行几个"参数。
-    constexpr int kPerRow = 4;
-    constexpr int kNumRows = (kNumButtons - 1 + kPerRow - 1) / kPerRow;  // 向上取整
-    static_assert(kNumRows >= 1, "至少要有 1 行按钮");
-
-    // 两行高度 + 中间间距 + 上下留白, 从屏幕底部往上铺。
-    const int row_gap = bh / 3;  // 行间距, 随按钮高度缩放
-    const int grid_w = win_w - 2 * margin;
-    const int grid_h = kNumRows * bh + (kNumRows - 1) * row_gap;
-
-    lv_obj_t *grid = lv_obj_create(scr);
-    lv_obj_remove_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(grid, 0, 0);
-    lv_obj_set_style_radius(grid, 0, 0);
-    lv_obj_set_style_pad_all(grid, 0, 0);
-    lv_obj_set_style_pad_row(grid, row_gap, 0);
-    lv_obj_set_size(grid, grid_w, grid_h);
-    lv_obj_align(grid, LV_ALIGN_BOTTOM_MID, 0, -margin);
-    // 竖直排布; 每行都要占满整行宽度, 所以交叉轴用 STRETCH
-    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-
-    for (int r = 0; r < kNumRows; r++) {
-        lv_obj_t *row = lv_obj_create(grid);
-        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(row, 0, 0);
-        lv_obj_set_style_radius(row, 0, 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_set_style_pad_column(row, margin, 0);
-        lv_obj_set_size(row, grid_w, bh);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER);
-
-        // 本轮要放的表项: 跳过 [0](退出按钮, 在右上角), 每行放 kPerRow 个。
-        const int first = 1 + r * kPerRow;
-        const int last = (first + kPerRow < kNumButtons) ? (first + kPerRow) : kNumButtons;
-        for (int i = first; i < last; i++) {
-            lv_obj_t *btn = createButton(row, kButtons[i], onAction);
-            lv_obj_set_height(btn, bh);
-            lv_obj_set_flex_grow(btn, 1);
-        }
+    // 触摸屏上按钮不能太小 (手指触点约 40~50 px): 取屏高 9%, 限制 36..64
+    int btn_h = pct(win_h, 9);
+    if (btn_h < 36) {
+        btn_h = 36;
     }
+    if (btn_h > 64) {
+        btn_h = 64;
+    }
+
+    const int header_h = pct(win_h, 11);
+    const int footer_h = btn_h + 2 * margin;
+
+    buildHeader(scr, win_w, header_h, margin);
+    buildContent(scr, win_w, header_h, win_h - header_h - footer_h);
+    buildFooter(scr, win_w, btn_h, margin);
 }
 
 // 开发机窗口模式下给鼠标画个指针。板上是触摸屏, 而且 LVGL 的 X11 后端
@@ -405,6 +528,8 @@ void addMouseCursor(void)
         if (lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER) {
             lv_obj_t *cur = lv_label_create(lv_layer_top());
             lv_label_set_text(cur, LV_SYMBOL_GPS);
+            // 深底上用强调色, 别用主题默认色
+            lv_obj_set_style_text_color(cur, lv_color_hex(kColAccent), 0);
             lv_indev_set_cursor(indev, cur);
             return;
         }
@@ -499,6 +624,7 @@ int main(int argc, char **argv)
     if (font_file != nullptr) {
         g_font_big = createFont(font_file, kBigFontPx, "主标题");
         g_font_small = createFont(font_file, kSmallFontPx, "按钮标签");
+        g_font_status = createFont(font_file, kStatusFontPx, "状态文字");
     }
 
     g_disp = lv_x11_window_create(kTitle, win_w, win_h);
@@ -529,8 +655,8 @@ int main(int argc, char **argv)
         addMouseCursor();
     }
 
-    std::printf("  布局   : 主标题居中, 退出按钮右上角, %d 个功能按钮在底部 (2 行)\n",
-                kNumButtons - 1);
+    std::printf("  布局   : 深色工业风 —— 顶栏(品牌/状态灯/退出) + 内容区 + "
+                "底栏 %d 个功能按钮 (2 行)\n", kNumButtons - 1);
     std::printf("\n交互:\n");
     std::printf("  点右上角【退出】   退出程序\n");
     std::printf("  点底部功能按钮     控制板载 LED / 蜂鸣器 (未绑定的打印占位提示)\n");
@@ -558,6 +684,9 @@ int main(int argc, char **argv)
     }
     if (g_font_small != nullptr) {
         lv_freetype_font_delete(g_font_small);
+    }
+    if (g_font_status != nullptr) {
+        lv_freetype_font_delete(g_font_status);
     }
     lv_deinit();
     return 0;

@@ -35,6 +35,9 @@ $Here       = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $Here
 $BuildDir   = Join-Path $ProjectRoot "build-armhf"
 
+# 两个目标由同一次 cmake 产出, 少任何一个都说明构建不完整 —— 清单只写这一处。
+$Artifacts  = @("deffire-gui-dev", "deffire-dev")
+
 # --- 检查 docker ---
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Fail "找不到 docker。请安装并启动 Docker Desktop:"
@@ -110,10 +113,28 @@ if ($LASTEXITCODE -ne 0) { Fail "容器内构建失败"; exit 1 }
 # --- 取回产物 ---
 # docker 没有"从镜像直接拷文件"的命令, 标准做法: create 一个容器再 cp (create 不启动, 很快)
 Info "=== 取回产物 ==="
+
+# 先清掉上一次的产物。不清的话, "新产物缺失"会被同名旧文件顶替, 下面的逐个检查
+# 就形同虚设 —— 产物改名那次就出现过 halloworld-* 与 deffire-* 并存的情况。
+# 删不掉(被编辑器/杀毒占用)直接失败: 留着旧文件比构建失败更危险。
+foreach ($exe in $Artifacts) {
+    $old = Join-Path $BuildDir $exe
+    if (Test-Path $old) {
+        Remove-Item $old -Force -ErrorAction SilentlyContinue
+        if (Test-Path $old) {
+            Fail "旧产物删不掉: $old"
+            Fail "    (多半被其它进程占用, 关掉编辑器 / 暂停同步盘再试)"
+            exit 1
+        }
+        Write-Host "  已清掉旧产物 $exe"
+    }
+}
+
 $cid = (& docker create $BuildImage).Trim()
-foreach ($exe in @("deffire-gui-dev", "deffire-dev")) {
+foreach ($exe in $Artifacts) {
     & docker cp "${cid}:/work/build-armhf/$exe" (Join-Path $BuildDir $exe) 2>$null
     if ($LASTEXITCODE -eq 0) { Write-Host "  ✓ $exe" }
+    else { Write-Host "  ✗ $exe  (docker cp 失败, 退出码 $LASTEXITCODE)" }
 }
 & docker rm $cid | Out-Null
 & docker rmi $BuildImage 2>$null | Out-Null
@@ -139,16 +160,24 @@ $stamp | ForEach-Object { "    $_" }
 # --- 结果 ---
 Write-Host ""
 Info "=== 产物 ==="
-$found = $false
-foreach ($exe in @("deffire-gui-dev", "deffire-dev")) {
+# 逐个检查, 而不是"至少有一个": 两个目标由同一次 cmake 产出, 少任何一个都说明
+# 构建不完整。原来的写法只判断"一个都没有", 于是 GUI 缺失、控制台在时仍然算通过
+# —— 在 CI 里等于静默交付了一个没有界面的构建。
+$missing = @()
+foreach ($exe in $Artifacts) {
     $f = Join-Path $BuildDir $exe
     if (Test-Path $f) {
         $sz = (Get-Item $f).Length
         Write-Host ("  {0,-20} {1,9} 字节" -f $exe, $sz)
-        $found = $true
+    } else {
+        Write-Host ("  {0,-20} 缺失" -f $exe)
+        $missing += $exe
     }
 }
-if (-not $found) { Fail "build-armhf\ 里没有可执行文件"; exit 1 }
+if ($missing.Count -gt 0) {
+    Fail "缺产物: $($missing -join ', ')"
+    exit 1
+}
 
 Write-Host ""
 Ok "✓ 完成: $BuildDir"

@@ -47,6 +47,7 @@ endif()
 add_library(firecontrol
     src/greeting.cpp
     src/usetools.cpp
+    src/start.cpp
 )
 target_include_directories(firecontrol PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -174,6 +175,7 @@ else()
         target_compile_options(halloworld-gui PRIVATE ${GUI_DEPS_CFLAGS_OTHER})
         target_link_directories(halloworld-gui PRIVATE ${GUI_DEPS_LIBRARY_DIRS})
         target_link_libraries(halloworld-gui PRIVATE
+            firecontrol                # 业务/硬件层: led_on / led_off 等
             lvgl::lvgl                 # LVGL 本体
             ${GUI_DEPS_LIBRARIES}      # libX11 + libfreetype
             pthread m                  # X11 后端用线程模拟 tick; LVGL 内部用 libm

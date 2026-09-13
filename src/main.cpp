@@ -1,19 +1,9 @@
 #include "greeting.h"
-
-#include <iostream>
-
-/*
-*   项目实际代码块（当前意义不明）
-*
-*   读文件里的浮点数用 useable_tools::read_File，用法:
-*       #include "usetools.h"
-*       float v[8];
-*       int n = useable_tools::read_File("data.txt", v, 8);
-*       // n < 0 表示文件打不开; 否则前 n 个元素有效
-*/
+#include "start.h"
 
 int main()
 {
-    std::cout << firecontrol::greeting() << std::endl;
-    return 0;
+    // 真正的代码在 src/start.cpp 的 cpp_start() 里。
+    // 这里只保留"入口"这一件事: 调用, 然后返回它的结果。
+    return cpp_start();
 }

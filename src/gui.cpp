@@ -41,6 +41,8 @@
 #include <cstring>
 #include <unistd.h>
 
+#include "start.h"  // led_on / led_off (板载 sys-led)
+
 namespace {
 
 constexpr const char *kTitle = "FireControlApp";
@@ -134,10 +136,12 @@ struct ButtonSpec {
 constexpr int kNumPlaceholders = 4;
 constexpr int kNumButtons = 1 + kNumPlaceholders;
 
-// [0] 是右上角退出, 其余是底部占位。
+// [0] 是右上角退出, 其余是底部按钮。
+// active: 前两个接的是板载 sys-led 的开/关, 已经能用, 所以是 true;
+//         后两个还没实现, 保持 false (按钮上会多画一圈 outline 标出"还没做")。
 constexpr ButtonSpec kButtons[kNumButtons] = {
     {"退出", true},
-    {"功能 1", false}, {"功能 2", false}, {"功能 3", false}, {"功能 4", false},
+    {"开灯", true}, {"关灯", true}, {"功能 3", false}, {"功能 4", false},
 };
 
 // ---------------------------------------------------------------------------
@@ -188,8 +192,20 @@ void onClickPlaceholder(lv_event_t *e)
     if (indev != nullptr) {
         lv_indev_get_point(indev, &p);
     }
-    std::printf("点击【%s】(占位, 功能待定) 坐标 (%d,%d)\n", label,
-                static_cast<int>(p.x), static_cast<int>(p.y));
+    std::printf("点击【%s】坐标 (%d,%d) → ", label, static_cast<int>(p.x),
+                static_cast<int>(p.y));
+
+    // 底部前两个按钮: 板载 LED 开关。
+    // 用标签判断是权宜之计 —— 等按钮多起来应该改成按索引派发 (ButtonSpec 里
+    // 加一个动作枚举), 否则以后改文案会静默改掉功能。
+    if (std::strcmp(label, kButtons[1].label) == 0) {
+        std::printf("%s\n", led_on() == 0 ? "已开灯" : "开灯失败 (开发机无此设备)");
+    } else if (std::strcmp(label, kButtons[2].label) == 0) {
+        std::printf("%s\n", led_off() == 0 ? "已关灯" : "关灯失败 (开发机无此设备)");
+    } else {
+        // 移到这里的原打印: 还没绑动作的按钮仍然报坐标。
+        std::printf("(占位, 功能待定)\n");
+    }
     std::fflush(stdout);
 }
 

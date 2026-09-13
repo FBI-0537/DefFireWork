@@ -13,6 +13,9 @@
 set -euo pipefail
 
 IMAGE="${IMAGE:-firecontrol-armhf:bookworm}"
+# 基础镜像可用镜像站覆盖（例如网络访问不了 docker.io 时）:
+#     BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim ./build-armhf.sh
+BASE_IMAGE="${BASE_IMAGE:-}"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/build-armhf"
 DOCKERFILE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,6 +23,25 @@ DOCKERFILE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 c_info() { printf '\033[36m%s\033[0m\n' "$*"; }
 c_ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
 c_err()  { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# 挂载宿主源码目录所需的参数
+#
+# Fedora 默认 SELinux Enforcing, 容器默认读不到挂进来的宿主目录(报 Permission denied)。
+# 两种解法:
+#     :Z             给宿主目录打 container_file_t 标签 —— 会**永久改写宿主目录的
+#                    SELinux 标签**, 而且 restorecon 因为同时写了 fcontext 定制记录
+#                    会拒绝恢复(实测踩到过)。对源码仓库是侵入性的, 不采用。
+#     label=disable  只对本容器关闭 SELinux 隔离, **不动宿主标签**。采用这个。
+#
+# 代价: 容器内不再受 SELinux 约束。但构建进程以当前用户身份运行(非 root),
+#       只读源码 + 写构建目录, 风险可接受。要更强的隔离可自行改用 :Z, 并清楚
+#       它会改宿主标签。
+# ---------------------------------------------------------------------------
+MOUNT_OPTS=()
+if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = "Enforcing" ]; then
+    MOUNT_OPTS=(--security-opt label=disable)
+fi
 
 # ---------------------------------------------------------------------------
 # 选容器运行时: 优先 docker, 退回 podman
@@ -53,6 +75,7 @@ case "${1:-}" in
         image_exists || { c_info "镜像不存在, 先构建"; "$RUNTIME" build -t "$IMAGE" "$DOCKERFILE_DIR"; }
         c_info "=== 进入容器 ($IMAGE) ==="
         exec "$RUNTIME" run --rm -it \
+            "${MOUNT_OPTS[@]}" \
             --user "$(id -u):$(id -g)" \
             -v "$PROJECT_ROOT:/work" \
             -w /work \
@@ -70,36 +93,54 @@ if ! image_exists; then
     c_info "    (首次较慢; 之后除非 --rebuild 否则复用)"
 
     # -----------------------------------------------------------------------
+    # 基础镜像: 默认取 Dockerfile 的 FROM, 可用 BASE_IMAGE 覆盖(镜像站)
+    # -----------------------------------------------------------------------
+    if [ -z "$BASE_IMAGE" ]; then
+        BASE_IMAGE="$(grep -iE '^FROM' "$DOCKERFILE_DIR/Dockerfile" | head -1 | awk '{print $NF}')"
+    fi
+    BUILD_ARGS=()
+    if [ -n "$BASE_IMAGE" ]; then
+        BUILD_ARGS+=(--build-arg "BASE=$BASE_IMAGE")
+    fi
+
+    # -----------------------------------------------------------------------
     # 基础镜像可达性预检
     #
     # 不加这一步时, 如果 registry 不可达(网络受限 / 公司防火墙 / 守护进程没起来),
-    # `docker build` 会在拉基础镜像时长时间挂住 —— 看起来像卡死, 实际在等 TCP 超时。
+    # `build` 会在拉基础镜像时长时间挂住 —— 看起来像卡死, 实际在等 TCP 超时。
     # 这里先快速探一下, 给出明确原因而不是让你干等。
+    #
+    # 本地已有该基础镜像时跳过预检(离线构建场景)。
     # -----------------------------------------------------------------------
-    BASE_IMAGE="$(grep -iE '^FROM[[:space:]]' "$DOCKERFILE_DIR/Dockerfile" | head -1 | awk '{print $2}')"
     if [ -n "$BASE_IMAGE" ] && ! "$RUNTIME" image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
         c_info "    预检基础镜像可达性: $BASE_IMAGE"
-        if ! timeout 25 "$RUNTIME" pull --quiet "$BASE_IMAGE" >/dev/null 2>&1; then
+        if ! timeout 60 "$RUNTIME" pull --quiet "$BASE_IMAGE" >/dev/null 2>&1; then
             c_err ""
             c_err "✗ 拉不到基础镜像: $BASE_IMAGE"
             c_err ""
             c_err "  常见原因:"
             c_err "    - 网络受限, 访问不了镜像仓库 (docker.io / quay.io 等)"
-            c_err "    - Docker Desktop / 守护进程没有在运行"
+            c_err "    - 守护进程没有在运行"
             c_err ""
-            c_err "  处理办法:"
-            c_err "    - 换可达的仓库: 改 Dockerfile 的 FROM 行"
-            c_err "    - 或在能上网的机器上拉好再拷过来:  docker save / docker load"
-            c_err "    - podman 可在 /etc/containers/registries.conf 配镜像加速"
+            c_err "  处理办法(按可行性排序):"
             c_err ""
-            c_err "  注意: 原来的 Zig + sysroot 路径仍然可用 (见 cmake/toolchain-armhf.cmake),"
-            c_err "        但它只编纯逻辑层与控制台程序, 不编 GUI。"
+            c_err "    1) 用镜像站覆盖基础镜像:"
+            c_err "       BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \\"
+            c_err "           ./armhf-toolchain/build-armhf.sh"
+            c_err ""
+            c_err "    2) 或在能联网的机器上拉好再拷过来:"
+            c_err "       docker pull debian:bookworm-slim"
+            c_err "       docker save debian:bookworm-slim | gzip > debian.tar.gz"
+            c_err "       # 目标机: gunzip -c debian.tar.gz | docker load"
+            c_err ""
+            c_err "    3) podman 可在 /etc/containers/registries.conf 配镜像加速"
             exit 1
         fi
         c_info "    ✓ 基础镜像可达"
     fi
 
-    "$RUNTIME" build -t "$IMAGE" "$DOCKERFILE_DIR"
+    c_info "    基础镜像: $BASE_IMAGE"
+    "$RUNTIME" build "${BUILD_ARGS[@]}" -t "$IMAGE" "$DOCKERFILE_DIR"
 fi
 
 mkdir -p "$BUILD_DIR"
@@ -113,6 +154,7 @@ mkdir -p "$BUILD_DIR"
 c_info "=== 容器内交叉编译 ($RUNTIME / $IMAGE) ==="
 
 "$RUNTIME" run --rm \
+    "${MOUNT_OPTS[@]}" \
     --user "$(id -u):$(id -g)" \
     -v "$PROJECT_ROOT:/work" \
     -w /work \

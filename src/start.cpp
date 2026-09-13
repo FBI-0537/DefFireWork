@@ -99,13 +99,58 @@ int render()
 //
 // 返回值交给调用者处理: 开发机上这个路径不存在, 会返回 -1,
 // 所以失败是常态, 不要在这里 printf 刷屏。
+//
+//需要注意的是，这些硬件都是主板原有的硬件，所以加上_onboard_，以区分。
 // ---------------------------------------------------------------------------
-int led_on()
+int led_onboard_on()
 {
     return useable_tools::write_File(Led_on_board_Path, "1");
 }
 
-int led_off()
+int led_onboard_off()
 {
     return useable_tools::write_File(Led_on_board_Path, "0");
+}
+
+int buzzer_onboard_on()
+{
+    return useable_tools::write_File(Buzzer_on_board_Path, "1");
+}
+
+int buzzer_onboard_off()
+{
+    return useable_tools::write_File(Buzzer_on_board_Path, "0");
+}
+
+// ---------------------------------------------------------------------------
+// 心跳
+//
+// 写的是 **trigger** 文件, 不是 brightness —— 见 hardware_path.h 里的说明。
+// 往 brightness 写 "heartbeat" 内核会返回 EINVAL。
+//
+// 两个注意点:
+//   1. 心跳期间 brightness 由内核接管, 手动写 brightness 不会生效
+//      (想恢复手动控制必须先 clear_heartbeat)。
+//   2. write_File 用 "w" 模式打开(截断)。sysfs 属性文件每次 write 都是独立
+//      写入, 截断对它没影响; 但它对普通文件是覆盖写, 别拿它写日志。
+// ---------------------------------------------------------------------------
+int led_onboard_set_heartbeat()
+{
+    return useable_tools::write_File(Led_trigger_Path, "heartbeat");
+}
+
+int buzzer_onboard_set_heartbeat()
+{
+    return useable_tools::write_File(Buzzer_trigger_Path, "heartbeat");
+}
+
+int led_onboard_clear_heartbeat()
+{
+    // 写 "none" 而不是 "" —— 空字符串会被内核当作无效输入。
+    return useable_tools::write_File(Led_trigger_Path, "none");
+}
+
+int buzzer_onboard_clear_heartbeat()
+{
+    return useable_tools::write_File(Buzzer_trigger_Path, "none");
 }

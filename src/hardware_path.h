@@ -20,4 +20,23 @@ inline constexpr const char *Led_on_board_Path = "/sys/class/leds/sys-led/bright
 // 蜂鸣器
 inline constexpr const char *Buzzer_on_board_Path = "/sys/class/leds/beep/brightness";
 
+// ---------------------------------------------------------------------------
+// trigger 文件 —— 和 brightness 是两个独立的 sysfs 属性
+//
+// 内核 LED 框架里, brightness 是"亮度值", trigger 是"由谁来控制亮度":
+//     echo none      > trigger    # 交还给 brightness, 手动控制
+//     echo heartbeat > trigger    # 内核按心跳节奏自动闪烁
+//     echo timer     > trigger    # 内核按定时器闪烁
+//
+// 往 brightness 里写 "heartbeat" 是错的 —— 那个文件只认数字, 内核返回 EINVAL。
+// 想让它闪就得写 trigger 文件, 这也是本文件要单独列这两个路径的原因。
+//
+// LED 和蜂鸣器**都**支持 heartbeat (见《ATK-DLMP135 功能测试》4.1):
+//     sys-led:  echo none|heartbeat > trigger, echo 1|0 > brightness
+//     beep   :  echo none|heartbeat > trigger, echo 1|0 > brightness
+// 注意恢复手动控制要先写 trigger=none, 否则 trigger 会一直覆盖 brightness。
+// ---------------------------------------------------------------------------
+inline constexpr const char *Led_trigger_Path = "/sys/class/leds/sys-led/trigger";
+inline constexpr const char *Buzzer_trigger_Path = "/sys/class/leds/beep/trigger";
+
 #endif

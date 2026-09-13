@@ -128,20 +128,43 @@ lv_font_t *createFont(const char *file, uint32_t px, const char *what)
 //
 // "有哪些按钮"是数据不是代码 —— 加按钮只改下面这张表, 布局按数量自动算。
 // ---------------------------------------------------------------------------
-struct ButtonSpec {
-    const char *label;  // UTF-8 显示文字
-    bool active;        // true = 已实现; false = 占位
+
+// 按钮绑定的动作。**不要用标签文字来判断点了哪个按钮** —— 那样改一次文案就
+// 会静默改掉功能, 而且编译器不会报错。加动作时在这里加一项, 然后在
+// onAction() 的 switch 里补一个 case (漏了会有 -Wswitch 警告, 因为没写 default)。
+enum class Action {
+    Nothing,             // 还没绑功能的占位按钮
+    LedOn,
+    LedOff,
+    LedHeartbeat,
+    BuzzerOn,
+    BuzzerOff,
+    BuzzerHeartbeat,
 };
 
-constexpr int kNumPlaceholders = 4;
-constexpr int kNumButtons = 1 + kNumPlaceholders;
+struct ButtonSpec {
+    const char *label;  // UTF-8 显示文字
+    bool active;        // true = 已实现; false = 占位 (按钮上多画一圈 outline)
+    Action action;      // 点击后执行的动作; 只有 active=true 时才有意义
+};
 
-// [0] 是右上角退出, 其余是底部按钮。
-// active: 前两个接的是板载 sys-led 的开/关, 已经能用, 所以是 true;
-//         后两个还没实现, 保持 false (按钮上会多画一圈 outline 标出"还没做")。
+constexpr int kNumButtons = 8;  // 1 个退出 + 7 个底部按钮
+
+// [0] 是右上角退出, 其余是底部按钮 (2 行 × 4 个)。
+//
+// 排布顺序按"设备"分组: 上排 LED, 下排蜂鸣器。同一设备的开关/心跳挨在一起,
+// 误触时不容易点错 —— 消防设备上点错比点慢更糟。
 constexpr ButtonSpec kButtons[kNumButtons] = {
-    {"退出", true},
-    {"开灯", true}, {"关灯", true}, {"功能 3", false}, {"功能 4", false},
+    {"退出", true, Action::Nothing},
+
+    {"LED 开", true, Action::LedOn},
+    {"LED 关", true, Action::LedOff},
+    {"LED 心跳", true, Action::LedHeartbeat},
+    {"蜂鸣器开", true, Action::BuzzerOn},
+
+    {"蜂鸣器关", true, Action::BuzzerOff},
+    {"蜂鸣器心跳", true, Action::BuzzerHeartbeat},
+    {"功能 8", false, Action::Nothing},
 };
 
 // ---------------------------------------------------------------------------
@@ -179,12 +202,12 @@ void onClickQuit(lv_event_t *e)
     g_quit = true;
 }
 
-void onClickPlaceholder(lv_event_t *e)
+void onAction(lv_event_t *e)
 {
     if (inStartupGrace()) {
         return;
     }
-    const auto *label = static_cast<const char *>(lv_event_get_user_data(e));
+    const auto *spec = static_cast<const ButtonSpec *>(lv_event_get_user_data(e));
 
     // 打印坐标便于板上核对触摸是否偏移 (板上待办之一)
     lv_point_t p{0, 0};
@@ -192,19 +215,35 @@ void onClickPlaceholder(lv_event_t *e)
     if (indev != nullptr) {
         lv_indev_get_point(indev, &p);
     }
-    std::printf("点击【%s】坐标 (%d,%d) → ", label, static_cast<int>(p.x),
+    std::printf("点击【%s】坐标 (%d,%d) → ", spec->label, static_cast<int>(p.x),
                 static_cast<int>(p.y));
 
-    // 底部前两个按钮: 板载 LED 开关。
-    // 用标签判断是权宜之计 —— 等按钮多起来应该改成按索引派发 (ButtonSpec 里
-    // 加一个动作枚举), 否则以后改文案会静默改掉功能。
-    if (std::strcmp(label, kButtons[1].label) == 0) {
-        std::printf("%s\n", led_on() == 0 ? "已开灯" : "开灯失败 (开发机无此设备)");
-    } else if (std::strcmp(label, kButtons[2].label) == 0) {
-        std::printf("%s\n", led_off() == 0 ? "已关灯" : "关灯失败 (开发机无此设备)");
-    } else {
-        // 移到这里的原打印: 还没绑动作的按钮仍然报坐标。
+    // 按动作派发。switch 里不写 default —— 以后往 Action 里加成员但忘了加
+    // case 时, -Wswitch 会在编译期报出来, 而不是让那个按钮默默什么都不做。
+    switch (spec->action) {
+    case Action::LedOn:
+        std::printf("%s\n", led_onboard_on() == 0 ? "LED 已点亮" : "失败 (开发机无此设备)");
+        break;
+    case Action::LedOff:
+        std::printf("%s\n", led_onboard_off() == 0 ? "LED 已熄灭" : "失败 (开发机无此设备)");
+        break;
+    case Action::LedHeartbeat:
+        std::printf("%s\n", led_onboard_set_heartbeat() == 0 ? "LED 心跳已开启"
+                                                             : "失败 (开发机无此设备)");
+        break;
+    case Action::BuzzerOn:
+        std::printf("%s\n", buzzer_onboard_on() == 0 ? "蜂鸣器已响" : "失败 (开发机无此设备)");
+        break;
+    case Action::BuzzerOff:
+        std::printf("%s\n", buzzer_onboard_off() == 0 ? "蜂鸣器已停" : "失败 (开发机无此设备)");
+        break;
+    case Action::BuzzerHeartbeat:
+        std::printf("%s\n", buzzer_onboard_set_heartbeat() == 0 ? "蜂鸣器心跳已开启"
+                                                                : "失败 (开发机无此设备)");
+        break;
+    case Action::Nothing:
         std::printf("(占位, 功能待定)\n");
+        break;
     }
     std::fflush(stdout);
 }
@@ -259,9 +298,10 @@ lv_obj_t *createButton(lv_obj_t *parent, const ButtonSpec &spec, lv_event_cb_t o
 {
     lv_obj_t *btn = lv_button_create(parent);
     applyButtonSkin(btn, spec.active);
-    // 回调里要拿按钮文字, 直接借 user_data 传这个静态字符串
+    // 回调里要拿整个 spec (标签 + 动作), 借 user_data 把表里那一项的地址传过去。
+    // kButtons 是 constexpr 静态存储, 生命周期覆盖整个程序, 指针一直有效。
     lv_obj_add_event_cb(btn, on_click, LV_EVENT_CLICKED,
-                        const_cast<char *>(spec.label));
+                        const_cast<ButtonSpec *>(&spec));
 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, spec.label);
@@ -302,26 +342,57 @@ void buildUi(int win_w, int win_h)
     lv_obj_set_size(quit_btn, pct(win_w, 8), bh);
     lv_obj_align(quit_btn, LV_ALIGN_TOP_RIGHT, -margin, margin);
 
-    // --- 底部占位按钮: 一行均分 ---
-    // 用 flex 而不是自己算坐标: 每个按钮 flex_grow=1 自动等宽, 间距由
-    // pad_column 给出 —— 换屏幕尺寸或改按钮数量都不用改布局代码。
-    lv_obj_t *row = lv_obj_create(scr);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_radius(row, 0, 0);
-    lv_obj_set_style_pad_all(row, 0, 0);
-    lv_obj_set_style_pad_column(row, margin, 0);
-    lv_obj_set_size(row, win_w - 2 * margin, bh);
-    lv_obj_align(row, LV_ALIGN_BOTTOM_MID, 0, -margin);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    // --- 底部按钮: 2 行 × 4 个 ---
+    //
+    // 8 个按钮排一行时每个只有 125 px, 中文标签会被挤到换行/截断。改成 2 行,
+    // 每个约 243 px, 手指点着也宽裕 (触摸目标建议 ≥ 48 px 见方, 高度由 bh 保证)。
+    //
+    // 外层用 flex 竖直排列, 每行还是 flex 横向均分 —— 加按钮只改 kButtons 表,
+    // 布局按数量自动重排: kPerRow 是唯一的"每行几个"参数。
+    constexpr int kPerRow = 4;
+    constexpr int kNumRows = (kNumButtons - 1 + kPerRow - 1) / kPerRow;  // 向上取整
+    static_assert(kNumRows >= 1, "至少要有 1 行按钮");
 
-    for (int i = 1; i < kNumButtons; i++) {
-        lv_obj_t *btn = createButton(row, kButtons[i], onClickPlaceholder);
-        lv_obj_set_height(btn, bh);
-        lv_obj_set_flex_grow(btn, 1);
+    // 两行高度 + 中间间距 + 上下留白, 从屏幕底部往上铺。
+    const int row_gap = bh / 3;  // 行间距, 随按钮高度缩放
+    const int grid_w = win_w - 2 * margin;
+    const int grid_h = kNumRows * bh + (kNumRows - 1) * row_gap;
+
+    lv_obj_t *grid = lv_obj_create(scr);
+    lv_obj_remove_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(grid, 0, 0);
+    lv_obj_set_style_radius(grid, 0, 0);
+    lv_obj_set_style_pad_all(grid, 0, 0);
+    lv_obj_set_style_pad_row(grid, row_gap, 0);
+    lv_obj_set_size(grid, grid_w, grid_h);
+    lv_obj_align(grid, LV_ALIGN_BOTTOM_MID, 0, -margin);
+    // 竖直排布; 每行都要占满整行宽度, 所以交叉轴用 STRETCH
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    for (int r = 0; r < kNumRows; r++) {
+        lv_obj_t *row = lv_obj_create(grid);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_radius(row, 0, 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_set_style_pad_column(row, margin, 0);
+        lv_obj_set_size(row, grid_w, bh);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+
+        // 本轮要放的表项: 跳过 [0](退出按钮, 在右上角), 每行放 kPerRow 个。
+        const int first = 1 + r * kPerRow;
+        const int last = (first + kPerRow < kNumButtons) ? (first + kPerRow) : kNumButtons;
+        for (int i = first; i < last; i++) {
+            lv_obj_t *btn = createButton(row, kButtons[i], onAction);
+            lv_obj_set_height(btn, bh);
+            lv_obj_set_flex_grow(btn, 1);
+        }
     }
 }
 
@@ -454,11 +525,11 @@ int main(int argc, char **argv)
         addMouseCursor();
     }
 
-    std::printf("  布局   : 主标题居中, 退出按钮右上角, %d 个占位按钮在底部\n",
-                kNumPlaceholders);
+    std::printf("  布局   : 主标题居中, 退出按钮右上角, %d 个功能按钮在底部 (2 行)\n",
+                kNumButtons - 1);
     std::printf("\n交互:\n");
     std::printf("  点右上角【退出】   退出程序\n");
-    std::printf("  点底部占位按钮     打印占位提示 (功能待定)\n");
+    std::printf("  点底部功能按钮     控制板载 LED / 蜂鸣器 (未绑定的打印占位提示)\n");
     std::printf("  按 q / Esc        退出程序\n");
     std::fflush(stdout);
 

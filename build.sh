@@ -150,8 +150,11 @@ NOTE
 }
 
 do_clean() {
-    rm -rf "$NATIVE_DIR" "$ARMHF_DIR"
-    c_ok "✓ 已清理 $NATIVE_DIR $ARMHF_DIR"
+    # build-gui-armhf 是**统一到 Docker 之前** GUI 交叉编译的输出目录
+    # (见 c80b177 的 do_gui_armhf: cmake -B "$GUI_ARMHF_DIR")。现在不再产生它,
+    # 但旧检出里可能留着, 一并清掉 —— 里面是过时工具链编出来的东西, 留着只会误导。
+    rm -rf "$NATIVE_DIR" "$ARMHF_DIR" build-gui-armhf
+    c_ok "✓ 已清理 $NATIVE_DIR $ARMHF_DIR build-gui-armhf(遗留)"
 }
 
 # ---------------------------------------------------------------------------

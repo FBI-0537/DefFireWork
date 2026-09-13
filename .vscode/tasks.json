@@ -142,7 +142,7 @@
                 "clear": true,
                 "focus": true
             },
-            "detail": "交叉编译 X11 GUI 到 armhf。需要 ~/Code/armhf-sysroot。产物 build-gui-armhf/halloworld-gui 不能在开发机运行, 要 scp 到板子。"
+            "detail": "交叉编译 X11 GUI 到 armhf。需要 docker 或 podman (走 armhf-toolchain/ 的统一环境, 不再需要手搭 sysroot)。产物 build-armhf/halloworld-gui 不能在开发机运行, 要拷到板子 —— 用 ./armhf-toolchain/deploy-to-board.sh。"
         },
         {
             "label": "CMake: 查看 armhf 产物架构",
@@ -150,7 +150,7 @@
             "command": "bash",
             "args": [
                 "-c",
-                "f=build-armhf/halloworld; if [ -f \"$f\" ]; then file \"$f\"; ${env:HOME}/.local/bin/arm-linux-gnueabihf-readelf -h \"$f\" | grep -E 'Class:|Machine:|Flags:'; echo \"体积: $(stat -c %s \"$f\") 字节\"; else echo '找不到 $f, 先跑 armhf 构建'; fi"
+                "f=build-armhf/halloworld; [ -f \"$f\" ] || { echo '找不到 build-armhf/halloworld, 先跑 ./build.sh gui-armhf'; exit 0; }; file \"$f\"; R=$(command -v readelf || command -v arm-linux-gnueabihf-readelf); if [ -n \"$R\" ]; then LC_ALL=C \"$R\" -h \"$f\" | grep -E 'Class:|Machine:|Flags:'; else echo '找不到 readelf (装 binutils)'; fi; echo \"体积: $(stat -c %s \"$f\") 字节\""
             ],
             "problemMatcher": [],
             "presentation": {
@@ -185,10 +185,11 @@
                 "-rf",
                 "build",
                 "build-debug",
-                "build-armhf"
+                "build-armhf",
+                "build-gui-armhf"
             ],
             "problemMatcher": [],
-            "detail": "删除全部构建目录 (build / build-debug / build-armhf)。"
+            "detail": "删除全部构建目录 (build / build-debug / build-armhf / build-gui-armhf)。最后一个是统一到 Docker 之前的遗留目录。"
         }
     ]
 }

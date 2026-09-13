@@ -101,6 +101,7 @@ cd FireControlApp
 .\armhf-toolchain\build-armhf.ps1         # Windows (Docker Desktop)
 ```
 
+镜像站（`docker.io` 不可达时）：
 
 ```bash
 BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \

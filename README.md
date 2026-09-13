@@ -184,17 +184,27 @@ armhf-env
 
 ---
 
-## 4. 交叉编译环境（armhf-toolchain / Docker）
+## 4. 交叉编译环境（armhf-toolchain / 容器）
 
 **统一入口：`armhf-toolchain/`** —— 环境由仓库里的 `Dockerfile` 定义，随代码走。
 
 ```bash
-docker build -t firecontrol-armhf:bookworm armhf-toolchain/
-./armhf-toolchain/build-armhf.sh          # Linux / macOS（也支持 podman）
+cd FireControlApp
+./armhf-toolchain/build-armhf.sh          # Linux / macOS（docker 或 podman 自动选）
 .\armhf-toolchain\build-armhf.ps1         # Windows (Docker Desktop)
 ```
 
-**为什么统一到 Docker**：在这之前 armhf 二进制可能来自三套不同环境
+**环境镜像不用手动 build** —— 脚本检测到不存在会自己建（首次较慢）。
+**Fedora 上不需要 `docker`**：装 `podman` 即可，脚本自动选运行时。
+
+**网络访问不了 `docker.io` 时**用镜像站（已验证可用）：
+
+```bash
+BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
+    ./armhf-toolchain/build-armhf.sh
+```
+
+**为什么统一到容器**：在这之前 armhf 二进制可能来自三套不同环境
 （Fedora+Zig / Windows+Docker / 板上原生），编译器与 libc 都不同却产出**同名**文件，
 出问题时无法判断来源。现在环境由 Dockerfile 描述，任何人构建结果一致。
 
@@ -203,21 +213,31 @@ docker build -t firecontrol-armhf:bookworm armhf-toolchain/
 | `Dockerfile` | 基于 `debian:bookworm-slim`（与板子同版本），装 Debian 官方交叉编译器 + armhf 版 X11/freetype |
 | `toolchain-docker-armhf.cmake` | 容器内用的 CMake 工具链文件 |
 | `build-armhf.sh` / `.ps1` | 两个平台的构建脚本 |
+| `Dockerfile.build-armhf` | 构建期用：源码 COPY 进镜像层编译（不依赖 bind mount） |
+| `toolchain-docker-armhf.cmake` | 容器内用的 CMake 工具链文件 |
+| `build-armhf.sh` / `.ps1` | 两个平台的构建入口 |
 | `verify-on-board.sh` | **在板上**校验产物：架构、ABI、运行时依赖、字体、X server |
-| `README.md` | 完整说明（含隔离设计） |
+| `README.md` | 完整说明（含实测状态与隔离设计） |
+
+**产物已验证**：`halloworld-gui` 399,624 字节，`ELF32 / ARM / hard-float`，
+依赖 `libX11` / `libfreetype` / `libgcc_s` / `libc`。
 
 ### 产物隔离
 
 每次构建写入 `build-armhf/TOOLCHAIN.txt`（工具链指纹），随产物一起拷到板上：
 
 ```
-compiler   = GNU 12.2.0
+compiler   = 12
 triplet    = arm-linux-gnueabihf
-cross      = TRUE
+build_mode = copy (容器内编译, 不依赖 bind mount)
 ```
 
 `CMakeLists.txt` 在 configure 时也会写这个文件；若构建目录里已有**不同**工具链的
 指纹会给出警告，避免把两种工具链的目标文件混在一起编。
+
+**构建方式说明**：源码是 COPY 进镜像层编译的，不是 bind mount。因为在部分环境
+（podman + 受限沙箱）挂进来的目录**只读**，与 SELinux / 属主设置无关。COPY 不依赖
+挂载，任何环境都能构建；代价是没有增量编译。
 
 上板前建议先校验：
 

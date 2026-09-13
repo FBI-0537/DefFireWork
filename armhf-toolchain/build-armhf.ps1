@@ -60,17 +60,33 @@ if ($Shell) {
 }
 
 # --- 构建 ---
+# 用 Dockerfile.build-armhf + COPY, 而不是 `-v` 挂载源码。
+# 挂载在部分环境会是只读(详见 build-armhf.sh 里的说明); COPY 不依赖挂载, 任何环境都能构建。
 if (-not (Test-Path $BuildDir)) { New-Item -ItemType Directory -Path $BuildDir | Out-Null }
 
-Info "=== 容器内交叉编译 (docker / $Image) ==="
-Info "    挂载: $ProjectRoot -> /work"
-& docker run --rm `
-    -v "${ProjectRoot}:/work" `
-    -w /work `
-    $Image `
-    bash -c "set -e; cmake -B build-armhf -S /work -DCMAKE_TOOLCHAIN_FILE=/work/armhf-toolchain/toolchain-docker-armhf.cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DWITH_GUI=ON; cmake --build build-armhf -j `$(nproc)"
+$BuildImage = "firecontrol-armhf-build:tmp"
 
-if ($LASTEXITCODE -ne 0) { Fail "构建失败"; exit 1 }
+Info "=== 容器内交叉编译 (docker) ==="
+Info "    方式: COPY 源码进镜像层 (不依赖 bind mount)"
+
+& docker build `
+    --build-arg "BASE_IMAGE=$Image" `
+    -f "$Here/Dockerfile.build-armhf" `
+    -t $BuildImage `
+    $ProjectRoot
+
+if ($LASTEXITCODE -ne 0) { Fail "容器内构建失败"; exit 1 }
+
+# --- 取回产物 ---
+# docker 没有"从镜像直接拷文件"的命令, 标准做法: create 一个容器再 cp (create 不启动, 很快)
+Info "=== 取回产物 ==="
+$cid = (& docker create $BuildImage).Trim()
+foreach ($exe in @("halloworld-gui", "halloworld")) {
+    & docker cp "${cid}:/work/build-armhf/$exe" (Join-Path $BuildDir $exe) 2>$null
+    if ($LASTEXITCODE -eq 0) { Write-Host "  ✓ $exe" }
+}
+& docker rm $cid | Out-Null
+& docker rmi $BuildImage 2>$null | Out-Null
 
 # --- 产物指纹 ---
 Info "=== 写工具链指纹 ==="
@@ -78,6 +94,7 @@ $fp = & docker run --rm $Image cat /etc/firecontrol-toolchain.txt
 $stamp = @(
     "# 本目录产物由以下工具链生成 —— 出问题时先看这里确认来源"
     $fp
+    "build_mode   = copy (容器内编译, 不依赖 bind mount)"
     "host_runtime = docker-desktop (windows)"
     "built_local  = $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
 )

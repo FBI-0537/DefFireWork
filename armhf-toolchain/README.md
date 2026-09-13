@@ -133,12 +133,53 @@ include/lib 路径列表 —— 版本永远和 Debian 仓库一致，不会漂�
 
 ---
 
-## ⚠️ 已知限制
+## ✅ 实测状态（已跑通，非推断）
+
+| 环节 | 结果 |
+|---|---|
+| 环境镜像构建 | ✅ `debian:bookworm-slim` + gcc-arm-linux-gnueabihf 12 + cmake 3.25.1 |
+| 镜像自检 1/2 | ✅ 能交叉编译 X11 + FreeType 的 armhf 程序（ELF32/ARM/hard-float） |
+| 镜像自检 2/2 | ✅ pkg-config 能查到 armhf 的 x11/freetype2 |
+| 容器内 cmake 配置 | ✅ 编译器 `/usr/bin/arm-linux-gnueabihf-g++`，libs `X11;freetype` |
+| 容器内完整编译 | ✅ LVGL 全量 + `halloworld-gui` 链接成功 |
+| 产物 | `halloworld-gui` **399,624 字节**，ELF32 ARM hard-float，依赖 `libX11`/`libfreetype`/`libgcc_s`/`libc` |
+| `verify-on-board.sh` 检查逻辑 | ✅ 32 位 / ARM / 硬浮点 / 4 个依赖 全部通过 |
+
+网络访问不了 `docker.io` 时，用镜像站即可（已验证可用）：
+
+```bash
+BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
+    ./armhf-toolchain/build-armhf.sh
+```
+
+---
+
+## 构建方式：为什么用 COPY 而不是挂载
+
+常规做法是 `docker run -v <仓库>:/work` 把源码挂进容器。但实测在部分环境
+（podman + 受限沙箱）挂进来的目录**只读**：
+
+```
+mkdir: cannot create directory '/work/build-armhf/CMakeFiles': Permission denied
+```
+
+与 SELinux / 目录属主**无关** —— 干净的 `user_home_t` 目录同样写不了。
+
+所以本目录改用 `Dockerfile.build-armhf` + `COPY`：源码复制进镜像层编译，
+产物再用 `podman cp` 取回宿主，**全程不依赖 bind mount**。
+
+**代价**：没有增量编译，每次全量重编 LVGL（本机 4 线程约 20 秒）。
+**收益**：任何环境都能构建。
+
+---
+
+## ⚠️ 其他注意事项
 
 - **Windows 上需要 Docker Desktop 处于运行状态**，脚本会检测并给出提示。
-- 本 Dockerfile 在编写时**未能在作者机器上实测** —— 那台机器无法访问
-  `docker.io`（拉不到 `debian:bookworm-slim`）。语法与包名均已核对，
-  但请以第一次 `docker build` 的结果为准。构建期自检会兜住绝大部分问题。
+- **Fedora 上不需要 `docker`** —— 装 `podman` 即可，脚本会自动选择运行时。
+- **SELinux**：脚本用 `--security-opt label=disable` 而非 `:Z`。后者会**永久改写
+  宿主目录的 SELinux 标签**，且 `restorecon` 会以 "customized by admin" 为由
+  拒绝恢复（实测踩到过）。前者只对本容器关闭隔离，不动宿主标签。
 - 旧的 `cmake/toolchain-armhf.cmake`（Zig 版，编译**纯逻辑层与控制台程序**）
   **仍然保留** —— 它不需要 X11，用 Zig 编很快，作为轻量路径继续可用。
   只有 **GUI** 必须走本目录的 Docker 环境。

@@ -474,8 +474,12 @@ int main(int argc, char **argv)
     std::printf("  屏幕   : %dx%d, 深度 %d\n", screen_w, screen_h, screen_depth);
     XCloseDisplay(probe);
 
-    // 窗口尺寸按屏幕实际尺寸算。板上是否有窗口管理器**尚未确认** (见
-    // README「板上运行环境」)。有 WM 时它可能接管这个窗口; 没有时窗口就铺满屏幕。
+    // 窗口尺寸按屏幕实际尺寸算。
+    //
+    // 板上确认跑着 **Openbox** (桌面环境 LXDE, 见 README「板上运行环境」), 所以
+    // 这个窗口会被 WM 接管: 开发机上实测窗口被加了装饰、报了 1074x687 而不是
+    // 请求的 1024x600。要真正铺满屏幕, 需要在建窗口后发
+    // _NET_WM_STATE_FULLSCREEN (走 EWMH, 见 WARNING.md C-7)。
     const int win_w = windowed ? kBoardWidth : screen_w;
     const int win_h = windowed ? kBoardHeight : screen_h;
     std::printf("  窗口   : %dx%d%s\n", win_w, win_h,

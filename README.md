@@ -146,7 +146,14 @@ armhf-env               # 检查这套环境是否就绪
 | 内存 | **437 MiB**（这是选型硬约束） |
 | 屏幕 | 1024×600（正点原子 7 寸 RGB LCD，型号 7016） |
 | 触摸 | Goodix 电容触摸屏，I2C-1 |
-| 桌面 | Xorg `:0`（窗口管理器**未确认**，见下） |
+| 桌面 | Xorg `:0` + LXDE / **Openbox**（有窗口管理器，见下） |
+
+> 桌面环境由板上 `neofetch` 实测确认：`DE: LXDE` / `WM: Openbox` / `Resolution: 1024x600`。
+
+**有窗口管理器的后果**：`lv_x11_window_create()` 建的窗口会被 Openbox 接管 ——
+开发机上（同样是 WM 环境）实测窗口被加上装饰，报出来的尺寸是 1074x687 而不是请求的
+1024x600。要做真正的全屏，需要在建窗口后发 `_NET_WM_STATE_FULLSCREEN`（走 EWMH）。
+详见 WARNING.md C-7。
 
 **板上需要装的**：
 
@@ -197,12 +204,27 @@ ctest --test-dir build --output-on-failure
 
 ### 5.3 部署到板子
 
-```bash
-./armhf-toolchain/verify-on-board.sh root@<板子IP>      # 上板前先校验
+项目是**开发机交叉编译、产物拷到板上跑**，板上不编译（性能不够）。所以没有
+"板上 `git pull`"这条路，一切都从开发机推：
 
-scp build-armhf/halloworld-gui build-armhf/TOOLCHAIN.txt root@<板子IP>:~/
-ssh root@<板子IP> 'DISPLAY=:0 ./halloworld-gui'
+```bash
+./armhf-toolchain/verify-on-board.sh fbi@<板子IP>        # 上板前先校验产物与本板匹配
+./armhf-toolchain/deploy-to-board.sh fbi@<板子IP>        # 传输产物 + 权限脚本
+./armhf-toolchain/deploy-to-board.sh --run fbi@<板子IP>  # 传完直接启动
 ```
+
+必须显式给 `用户@IP`：开发机上通常解析不了板子的短主机名。
+
+**首次部署还要在板上做一次权限配置**（否则界面里点 LED / 蜂鸣器没反应）：
+
+```bash
+ssh fbi@<板子IP>
+sudo bash ~/setup-board-permissions.sh fbi
+sudo reboot
+```
+
+原因见 [WARNING.md](WARNING.md) 的「sysfs 权限」一节 —— `/sys/class/leds/*/brightness`
+默认是 root 只写，普通用户写的失败被静默吞掉了。
 
 ### 5.4 GUI 交互
 
@@ -212,15 +234,21 @@ ssh root@<板子IP> 'DISPLAY=:0 ./halloworld-gui'
 │                                              └────────┘
 │                    halloworld                          │  ← 居中标题
 │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐          │
-│  │ 功能 1 │ │ 功能 2 │ │ 功能 3 │ │ 功能 4 │          │  ← 底部占位
+│  │ LED 开 │ │ LED 关 │ │LED 心跳│ │蜂鸣器开│          │  ← 上排
 │  └────────┘ └────────┘ └────────┘ └────────┘          │
+│  ┌────────┐ ┌────────┐ ┌────────┐                     │
+│  │蜂鸣器关│ │蜂鸣器心跳│ │ 功能 8 │                    │  ← 下排
+│  └────────┘ └────────┘ └────────┘                     │
 └────────────────────────────────────────────────────────┘
 ```
+
+按钮表在 `gui.cpp` 的 `kButtons`，布局按数量自动排（`kPerRow` 控制每行几个）。
 
 | 操作 | 效果 |
 |---|---|
 | 点右上角【退出】 | 退出程序 |
-| 点底部【功能 1~4】 | 目前只打印提示（**功能待定**） |
+| 点 LED / 蜂鸣器按钮 | 控制板载 `sys-led` / `beep`。板上需要先配权限（见 5.3） |
+| 点【功能 8】 | 占位，打印提示 |
 | 按 `q` / `Esc` | 退出程序 |
 
 按钮尺寸按窗口比例计算，高度限制在 36–64 px（触摸操作需要）。
@@ -288,8 +316,7 @@ build-debug/         Debug 构建
   将来若去掉 Xorg，把显示初始化换成 `lv_linux_fbdev` + `lv_evdev` 即可，界面代码不用动。
 - **中文字体走 FreeType 运行时加载**：改文案不用重新生成字库。字体按**文件路径**查找而非
   字体名，避免 fontconfig 静默替换成不含汉字的字体。
-- **默认全屏**：窗口按屏幕实际尺寸铺满。板上是否有窗口管理器**未确认**，
-  有的话 WM 可能会接管窗口尺寸。
+- **默认全屏**：窗口按屏幕实际尺寸铺满（板上跑着 Openbox，见「板上运行环境」）。
 
 各项的设计取舍与踩过的坑在 [WARNING.md](WARNING.md)。
 
@@ -316,7 +343,7 @@ build-debug/         Debug 构建
 - [ ] 板上实测触摸：点【退出】与占位按钮的命中是否准确、坐标是否偏移
 - [ ] 确认全屏下字号观感（`kBigFontPx` / `kSmallFontPx`）
 - [ ] 给字体候选表补上 Fedora 的路径（方便开发机预览中文，见 WARNING.md A-2）
-- [ ] **确认板上有没有窗口管理器**（板上执行 `ps -eo comm | grep -E 'xfwm|mutter|kwin|openbox|matchbox'`），
-      再决定要不要装极简 WM
+- [ ] **实测 Openbox 下是否真全屏**：板上跑一次无参 `./halloworld-gui`，看窗口有没有被
+      加标题栏 / 留边距。没铺满就要发 `_NET_WM_STATE_FULLSCREEN`（见 WARNING.md C-7）
 - [ ] 填充 4 个占位按钮的实际功能
 - [ ] 传感器模块（当前 0%）

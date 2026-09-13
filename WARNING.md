@@ -201,12 +201,27 @@ BASE_IMAGE="$(grep -iE '^FROM' Dockerfile | head -1 | awk '{print $NF}')"
 
 **根因**：`build.sh` 里定义了 `GUI_ARMHF_DIR="build-gui-armhf"`，但
 `armhf-toolchain/build-armhf.sh` 里写死了 `BUILD_DIR="$PROJECT_ROOT/build-armhf"`。
-两个路径都不在 `build-gui-armhf`，那个目录从来没被创建过。
+校验指向 `build-gui-armhf`，而产物落在 `build-armhf`，所以必然为假。
 
-**修复**：armhf 产物统一用 `build-armhf` —— Zig 版（`do_armhf`）和 Docker 版
-（`do_gui_armhf`）都写这里，检查也统一指向 `ARMHF_DIR`。
+**注意 `build-gui-armhf` 不是凭空来的**：统一到 Docker **之前**，GUI 交叉编译确实
+输出到这个目录（`c80b177` 的 `do_gui_armhf` 里是 `cmake -B "$GUI_ARMHF_DIR"`）。
+统一之后不再产生它，但**旧检出里可能留着**这个目录。
 
-**注意**：两个版本共用一个目录，来回切换时 CMake 的工具链指纹检查会报警告
+（本条早期版本写的是"那个目录从来没被创建过"—— 那是从当前状态推断的，**是错的**。
+判断一个目录/变量是不是遗留，要查 `git log -S`，不要看当前代码里有没有人写它。）
+
+**修复**：
+
+- armhf 产物统一用 `build-armhf` —— Zig 版（`do_armhf`）和 Docker 版
+  （`do_gui_armhf`）都写这里，校验统一指向 `ARMHF_DIR`
+- `do_clean` **保留** `build-gui-armhf` 一项，用于清掉旧检出的遗留目录
+  （`.vscode/tasks.json` 的清理任务里也加上了）
+- `.vscode/tasks.json` 里两处过时引用一并修正：GUI 任务的 detail 不再提
+  `~/Code/armhf-sysroot`，`readelf` 不再写死 Zig 包装脚本的路径
+  （`~/.local/bin/arm-linux-gnueabihf-readelf`），改为先找 `readelf` 再退回
+  `arm-linux-gnueabihf-readelf`，并强制 `LC_ALL=C`（见 D-1）
+
+**注意**：两个版本共用一个 `build-armhf`，来回切换时 CMake 的工具链指纹检查会报警告
 （见 `CMakeLists.txt`）。那时删掉 `build-armhf` 重新构建即可。
 
 ### B-18. `build-armhf.ps1` 的 UTF-8 BOM 不能丢
@@ -290,26 +305,42 @@ xev                                        # 看原始事件
 **已缓解**：忽略映射后 400 ms 内的点击（用单调时钟，不用 X 事件时间戳 ——
 `XExposeEvent` **没有 `time` 字段**，拿不到首帧时刻）。根因（X server/WM 行为）不在本项目控制内。
 
-### C-7. 窗口管理器：**状态未确认**
+### C-7. 板上**有**窗口管理器（Openbox），窗口不会是自动全屏
 
-早先的记录写的是"板上没有窗口管理器"，那是**推断**出来的（看到 `/dev/fb0` 归 Xorg，
-就以为没有 WM）—— **推理不成立**，Xorg 和 WM 是两个独立进程。
+**结论（板上 neofetch 实测）**：
 
-要确认得在板上查：
-
-```sh
-ps -eo comm | grep -E 'xfwm|mutter|kwin|openbox|matchbox|marco|i3|fluxbox'
-echo "XDG_CURRENT_DESKTOP=$XDG_CURRENT_DESKTOP"
+```
+DE: LXDE     WM: Openbox     Resolution: 1024x600
 ```
 
-对有/无两种情况的预期：
+**这条记录曾经是错的。** 早先写的是"板上没有窗口管理器"，那是**推断**出来的——看到
+`/dev/fb0` 归 Xorg，就以为没有 WM。推理不成立：Xorg 和 WM 是两个独立进程。
+后来改成"未确认"，最终由板上 `neofetch` 确认为 **Openbox**。
 
-- **有 WM**：WM 会接管 `lv_x11_window_create()` 建的窗口。窗口可能带标题栏和边框，
-  也可能被 WM 按自己的策略摆放尺寸。界面里的【退出】按钮和 `q`/`Esc` 仍然有效。
-- **无 WM**：窗口尺寸就是代码算的屏幕实际尺寸，没有标题栏/边框/关闭按钮，
-  关闭只能靠【退出】按钮或 `q`/`Esc`。
+这就是为什么窗口不是直接铺满屏幕：
 
-在确认之前，代码只保证"按屏幕实际尺寸建窗口"，不对 WM 做任何假设。
+- `lv_x11_window_create()` 建的是普通 X 窗口，**Openbox 会接管它**
+- 开发机上（同样是 WM 环境，Mutter）实测：请求 1024×600，实际拿到 **1074×687** ——
+  WM 加了装饰，还改变了尺寸。板上 Openbox 行为类似，装饰更少但不为零。
+- 界面里的【退出】按钮和 `q`/`Esc` 仍然有效（WM 不会吞掉客户区内的点击）。
+
+**要真正全屏**，需要在建窗口之后发 EWMH 消息：
+
+```c
+// 伪代码: 通过 XSendEvent 发 _NET_WM_STATE_FULLSCREEN
+// 需要 XInternAtom("_NET_WM_STATE") / ("_NET_WM_STATE_FULLSCREEN")
+// 发送到 root window, 带 SubstructureRedirectMask | SubstructureNotifyMask
+```
+
+**目前代码没有发这条消息**，所以板上多半会看到带标题栏的窗口。上板第一件事就是确认
+这一点，再决定要不要补这段。
+
+**另一条可选路径**：LXDE 下也可以直接关掉 WM 再跑程序，但那样桌面上其他程序也会失去
+窗口管理——不推荐。
+
+**教训（本项目犯过两次同类错误）**：`/dev/fb0` 归 Xorg 推不出"没有 WM"；蜂鸣器挂在
+`gpio-leds` 上推不出"低电平触发"。**硬件行为不要靠推断，要么查文档要么实测**，
+不确定就写"待确认"并给出验证命令。
 
 ---
 
@@ -384,6 +415,64 @@ Fedora 装 `podman` 就够，不需要额外配 Docker 仓库。
 export npm_config_prefix=/home/skywind_fox/.local
 npm install -g <pkg>
 ```
+
+### D-8. 普通用户写不了 `/sys/class/leds/*/brightness`（**失败被静默吞掉**）
+
+**症状**：界面里点【LED 开】【蜂鸣器开】没有任何反应，但手敲 sudo 却有效：
+
+```bash
+sudo sh -c 'echo 1 > /sys/class/leds/beep/brightness'   # 响 ✓
+echo 1 > /sys/class/leds/beep/brightness                # 没反应（普通用户）✗
+```
+
+**根因**：内核注册 LED 设备时把这些属性文件建成 root:root，权限还不统一：
+
+```
+-rwxr-xr-x 1 root root  .../beep/brightness      # 0755, 属主外不可写
+-rw-r--r-- 1 root root  .../sys-led/brightness   # 0644
+-rw-r--r-- 1 root root  .../beep/trigger         # 0644
+-rw-r--r-- 1 root root  .../sys-led/trigger      # 0644
+```
+
+（`beep/brightness` 那个 `x` 位是内核 LED 框架的怪癖，**不代表组可写**。）
+
+所以 `useable_tools::write_File()` 以 `fbi` 身份执行时 `fopen(..., "w")` 直接
+`EACCES`，返回 -1；而按钮回调只打印一行失败提示，看起来就像"程序坏了"。
+
+**顺带一个坑**：`sudo echo 1 > file` **不管用** —— 重定向由 shell 执行，shell 还是
+普通用户。必须 `sudo sh -c '...'` 或 `sudo tee`。
+
+**修复**：用 udev 规则把设备归到内核本来就支持的 `leds` 组
+（仓库里有脚本：`armhf-toolchain/setup-board-permissions.sh`）：
+
+```
+# /etc/udev/rules.d/90-leds.rules
+SUBSYSTEM=="leds", ACTION=="add", RUN+="/bin/chgrp -R leds /sys%p", RUN+="/bin/chmod -R g=u /sys%p"
+```
+
+```bash
+sudo groupadd -f leds
+sudo usermod -aG leds fbi
+sudo udevadm control --reload-rules && sudo reboot
+```
+
+**为什么必须在 udev 里做，不能直接 `chmod`**：sysfs 是内存文件系统，设备每次注册
+（重启、驱动重载）都会**重建**这些文件，权限被打回原样。`chmod` 只能临时验证。
+
+**为什么用组而不是 ACL**：udev 规则里**不做 shell 变量展开**，用户名没法写进规则；
+组名可以。ACL 方案需要额外的 `RUN+=/usr/bin/setfacl -m u:fbi:rw ...`，但要先把
+`fbi` 硬编码进去，换用户就得改规则。
+
+**为什么必须重启**：`udevadm trigger` 对**已注册**的 LED 常常不会重新执行 `RUN`
+（设备已存在，只是重新通告），而且组变更对已有会话无效。重启一次最干净。
+
+**另一条独立发现**：`sys-led/` 下有个 `invert` 文件，可以翻转 LED 的逻辑电平
+（`echo 1 > invert`）。如果 LED 的亮灭与预期相反，改它，**不要在 C++ 里调换
+`"1"`/`"0"`** —— 极性是硬件/设备树的事。
+
+**教训**：这次排查花了不少时间，因为**失败没有显式暴露** —— 程序只返回 -1，
+界面上看不出是权限问题。`deploy-to-board.sh` 现在会在传输后主动探测这四个文件
+对目标用户是否可写，不可写就直接提示要跑权限脚本。
 
 ---
 

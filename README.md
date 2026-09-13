@@ -89,8 +89,6 @@ sudo dnf install gcc gcc-c++ glibc-devel cmake ninja-build make gdb \
                  libX11-devel freetype-devel pkgconf-pkg-config
 ```
 
-**Fedora 上不需要装 `docker`** —— 装 `podman` 即可。
-
 ---
 
 ## 3. 交叉编译环境
@@ -103,8 +101,6 @@ cd FireControlApp
 .\armhf-toolchain\build-armhf.ps1         # Windows (Docker Desktop)
 ```
 
-- **镜像不用手动 build**，脚本检测到不存在会自己建（首次较慢）
-- **网络访问不了 `docker.io`** 时用镜像站：
 
 ```bash
 BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \

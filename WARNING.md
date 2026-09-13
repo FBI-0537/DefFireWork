@@ -342,6 +342,32 @@ DE: LXDE     WM: Openbox     Resolution: 1024x600
 `gpio-leds` 上推不出"低电平触发"。**硬件行为不要靠推断，要么查文档要么实测**，
 不确定就写"待确认"并给出验证命令。
 
+### C-8. 设了 trigger 之后，写 `brightness` 会立刻被覆盖
+
+**症状**：点了【LED 心跳】之后，再点【LED 开】或【LED 关】**看起来完全没反应**，
+灯还是按心跳闪。很容易误判成"权限不对"或"按钮没接上"。
+
+**根因**：内核 LED 框架里 `trigger` 和 `brightness` 是两层。
+trigger 一旦生效（`heartbeat` / `timer` 等），就由 trigger 周期性接管 brightness ——
+手动写进去的 `1`/`0` 在下一个心跳周期就被打回。
+
+**正确写法**：写 brightness 之前先把 trigger 交还：
+
+```cpp
+useable_tools::write_File(Led_trigger_Path, "none");   // 先交还控制权
+return useable_tools::write_File(Led_on_board_Path, "1");
+```
+
+`src/start.cpp` 里 4 个开/关函数（LED + 蜂鸣器）都是这个顺序。交还那一步的返回值
+**故意不检查**：不是所有设备都有 trigger 文件，没有时 brightness 本来就能直接生效。
+
+**连带效果**：因为开/关都会清 trigger，"心跳停不下来"的问题也一并缓解了 ——
+点一下【LED 开】或【LED 关】就等于停掉心跳，不必去 shell 里 `echo none > trigger`。
+
+**同类陷阱**：任何"由内核周期性驱动"的 sysfs 属性都可能有这个特性
+（例如背光的 `bl_power` 与 brightness、`gpio-leds` 的 trigger）。改这类属性前
+先确认有没有别的机制正在接管它。
+
 ---
 
 ## D. 环境与工具

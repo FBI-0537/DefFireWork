@@ -90,35 +90,55 @@ int render()
 }
 
 // ---------------------------------------------------------------------------
-// LED 测试
+// LED / 蜂鸣器的开与关
 //
 // 这两个是"动作", 不是"渲染": 点一次做一次。按钮回调里直接调它们。
 //
-// 正点原子的 sys-led: 写 "1" 亮, "0" 灭。
+// 正点原子的 sys-led / beep: 写 "1" 亮(响), "0" 灭(停)。
 // write_File 会自动补换行并检查落盘, 所以传 "1" 就行, 不用加 "\n"。
 //
 // 返回值交给调用者处理: 开发机上这个路径不存在, 会返回 -1,
 // 所以失败是常态, 不要在这里 printf 刷屏。
 //
 //需要注意的是，这些硬件都是主板原有的硬件，所以加上_onboard_，以区分。
+//
+// ---------------------------------------------------------------------------
+// **先写 trigger="none", 再写 brightness —— 顺序不能反**
+//
+// trigger 一旦生效 (比如 heartbeat), 内核就接管了 brightness, 会周期性把它改回
+// 自己的值。这时手动写 brightness 立刻被覆盖, 现象是"有了心跳之后, 开/关点了
+// 完全没反应", 很容易误判成硬件坏了或者权限不对。
+//
+// 所以每次调亮度之前先把控制权交还给 brightness。
+//
+// 交还这一步的返回值**故意不检查**: 不是所有设备都提供 trigger 文件, 没有它的
+// 时候 brightness 本来就能直接生效, 交还失败不影响"点亮/熄灭"本身。
+// 需要向调用者报告成功的只有最终那次 brightness 写入。
+//
+// 顺带一个效果: 因为开/关都会清 trigger, 所以"心跳停不下来"的问题也一并缓解了
+// —— 点一下【LED 开】或【LED 关】就等于停掉心跳。
 // ---------------------------------------------------------------------------
 int led_onboard_on()
 {
+    useable_tools::write_File(Led_trigger_Path, "none");
     return useable_tools::write_File(Led_on_board_Path, "1");
 }
 
 int led_onboard_off()
 {
+    useable_tools::write_File(Led_trigger_Path, "none");
     return useable_tools::write_File(Led_on_board_Path, "0");
 }
 
 int buzzer_onboard_on()
 {
+    useable_tools::write_File(Buzzer_trigger_Path, "none");
     return useable_tools::write_File(Buzzer_on_board_Path, "1");
 }
 
 int buzzer_onboard_off()
 {
+    useable_tools::write_File(Buzzer_trigger_Path, "none");
     return useable_tools::write_File(Buzzer_on_board_Path, "0");
 }
 

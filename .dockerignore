@@ -1,0 +1,13 @@
+# 构建上下文 = 仓库根。这些内容不需要进镜像, 也能减小传给容器的上下文体积。
+#
+# 注意: 不要在这里排除 armhf-toolchain/ —— Dockerfile.build-armhf 的
+# `FROM firecontrol-armhf:bookworm` 依赖那个镜像先由 armhf-toolchain/Dockerfile
+# 构建出来, 而它的构建上下文正是 armhf-toolchain/ 目录本身。
+.git
+.gitignore
+build
+build-*
+*.o
+*.a
+*.so
+.vscode

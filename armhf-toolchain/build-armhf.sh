@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
-# build-armhf.sh — 用 Docker 交叉编译 FireControlApp 到 armhf (Linux/macOS)
+# build-armhf.sh — 用容器交叉编译 FireControlApp 到 armhf (Linux/macOS)
 #
 # 用法:
-#   ./armhf-toolchain/build-armhf.sh              构建 GUI + 控制台 + 逻辑层
-#   ./armhf-toolchain/build-armhf.sh --rebuild    先重建镜像再构建
+#   ./armhf-toolchain/build-armhf.sh              构建 GUI + 控制台
+#   ./armhf-toolchain/build-armhf.sh --rebuild    先重建环境镜像再构建
 #   ./armhf-toolchain/build-armhf.sh --shell      进容器交互 (调试工具链用)
 #
+# 环境变量:
+#   IMAGE=...        环境镜像名 (默认 firecontrol-armhf:bookworm)
+#   BASE_IMAGE=...   基础镜像, 网络访问不了 docker.io 时用镜像站:
+#                    BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
+#                        ./armhf-toolchain/build-armhf.sh
+#
+# 需要 docker 或 podman(自动选择)。Fedora 上装 podman 即可, 不需要 docker。
 # Windows 用同目录的 build-armhf.ps1。
 #
-# 产物: build-armhf/ (含 TOOLCHAIN.txt 指纹, 见下)
+# 构建方式: 把源码 COPY 进镜像层编译, 产物再用 cp 取回宿主 —— 全程不依赖 bind mount。
+#           原因见下方"在容器里配置 + 构建"一节的注释。
+#
+# 产物: build-armhf/ (含 TOOLCHAIN.txt 工具链指纹)
 
 set -euo pipefail
 
@@ -148,26 +158,48 @@ mkdir -p "$BUILD_DIR"
 # ---------------------------------------------------------------------------
 # 在容器里配置 + 构建
 #
-# --user $(id -u):$(id -g) 很关键: 否则容器以 root 写文件, 产物的属主变成 root,
-# 在宿主上没法修改也没法删。
+# 用 Dockerfile.build-armhf + COPY, 而不是 `-v` 挂载源码目录。
+#
+# 为什么不挂载: 在部分环境(实测 podman + 受限沙箱)挂进来的目录**只读**, 报
+#     mkdir: cannot create directory '/work/build-armhf/CMakeFiles': Permission denied
+# 与 SELinux/属主无关 —— 干净的 user_home_t 目录同样写不了。COPY 不依赖挂载,
+# 任何环境都能构建。代价是没有增量编译, 每次全量。
+#
+# 产物用 `cp` 从构建出来的镜像里取回宿主, 也不依赖挂载。
 # ---------------------------------------------------------------------------
-c_info "=== 容器内交叉编译 ($RUNTIME / $IMAGE) ==="
+c_info "=== 容器内交叉编译 ($RUNTIME) ==="
+c_info "    方式: COPY 源码进镜像层 (不依赖 bind mount)"
 
-"$RUNTIME" run --rm \
-    "${MOUNT_OPTS[@]}" \
-    --user "$(id -u):$(id -g)" \
-    -v "$PROJECT_ROOT:/work" \
-    -w /work \
-    "$IMAGE" \
-    /bin/bash -c '
-        set -e
-        cmake -B build-armhf -S /work \
-              -DCMAKE_TOOLCHAIN_FILE=/work/armhf-toolchain/toolchain-docker-armhf.cmake \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DBUILD_TESTING=OFF \
-              -DWITH_GUI=ON
-        cmake --build build-armhf -j "$(nproc)"
-    '
+BUILD_IMAGE="firecontrol-armhf-build:tmp"
+BUILD_LOG="$(mktemp)"
+trap 'rm -f "$BUILD_LOG"' EXIT
+
+if ! "$RUNTIME" build \
+        --build-arg "BASE_IMAGE=$IMAGE" \
+        -f "$DOCKERFILE_DIR/Dockerfile.build-armhf" \
+        -t "$BUILD_IMAGE" \
+        "$PROJECT_ROOT" 2>&1 | tee "$BUILD_LOG" | grep -E '^\s*\[|Class:|Machine:|Flags:|error|Error|FAIL' ; then
+    c_err "✗ 容器内构建失败, 完整日志见: $BUILD_LOG"
+    tail -30 "$BUILD_LOG" >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 从构建镜像取回产物
+#
+# podman/docker 都没有"从镜像直接拷文件"的命令, 标准做法是先 create 一个容器
+# 再 cp。create 不启动容器, 所以很快。
+# ---------------------------------------------------------------------------
+c_info "=== 取回产物 ==="
+mkdir -p "$BUILD_DIR"
+CID="$("$RUNTIME" create "$BUILD_IMAGE")"
+for f in halloworld-gui halloworld; do
+    if "$RUNTIME" cp "$CID:/work/build-armhf/$f" "$BUILD_DIR/$f" 2>/dev/null; then
+        printf '  ✓ %s\n' "$f"
+    fi
+done
+"$RUNTIME" rm "$CID" >/dev/null 2>&1 || true
+"$RUNTIME" rmi "$BUILD_IMAGE" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 # 产物隔离: 写工具链指纹
@@ -181,6 +213,7 @@ FINGERPRINT="$("$RUNTIME" run --rm "$IMAGE" cat /etc/firecontrol-toolchain.txt)"
 {
     echo "# 本目录产物由以下工具链生成 —— 出问题时先看这里确认来源"
     echo "$FINGERPRINT"
+    echo "build_mode   = copy (容器内编译, 不依赖 bind mount)"
     echo "host_runtime = $RUNTIME"
     echo "host_arch    = $(uname -m)"
     echo "built_local  = $(date -u +%Y-%m-%dT%H:%M:%SZ)"

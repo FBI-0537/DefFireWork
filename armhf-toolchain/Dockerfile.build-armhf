@@ -35,8 +35,8 @@ RUN set -eux; \
           -DWITH_GUI=ON; \
     cmake --build /work/build-armhf -j "$(nproc)"; \
     echo "=== 产物 ==="; \
-    ls -la /work/build-armhf/halloworld-gui /work/build-armhf/halloworld 2>/dev/null || true; \
-    for f in /work/build-armhf/halloworld-gui /work/build-armhf/halloworld; do \
+    ls -la /work/build-armhf/deffire-gui-dev /work/build-armhf/deffire-dev 2>/dev/null || true; \
+    for f in /work/build-armhf/deffire-gui-dev /work/build-armhf/deffire-dev; do \
         [ -f "$$f" ] || continue; \
         arm-linux-gnueabihf-readelf -h "$$f" | grep -E 'Class:|Machine:|Flags:' | sed 's/^/    /'; \
     done

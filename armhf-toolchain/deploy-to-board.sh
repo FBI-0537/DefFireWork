@@ -15,7 +15,7 @@
 # 短主机名, 写死一个默认值只会让人误以为网络坏了。
 #
 # 传什么:
-#     halloworld-gui / halloworld / TOOLCHAIN.txt  →  ~/
+#     deffire-gui-dev / deffire-dev / TOOLCHAIN.txt  →  ~/Desktop/
 #     setup-board-permissions.sh                    →  ~/  (首次部署要跑一次)
 #
 # 注意: 脚本以目标用户 (fbi) 身份 ssh, 不用 root。root 只在**板上**执行
@@ -65,14 +65,14 @@ c_err()  { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 # ---------------------------------------------------------------------------
 # 1) 本地产物
 # ---------------------------------------------------------------------------
-if [ ! -f "$BUILD_DIR/halloworld-gui" ]; then
-    c_err "✗ 找不到 $BUILD_DIR/halloworld-gui"
+if [ ! -f "$BUILD_DIR/deffire-gui-dev" ]; then
+    c_err "✗ 找不到 $BUILD_DIR/deffire-gui-dev"
     c_err "  先交叉编译:  ./build.sh gui-armhf"
     exit 1
 fi
 
 c_info "=== 待传输 ==="
-for f in halloworld-gui halloworld TOOLCHAIN.txt; do
+for f in deffire-gui-dev deffire-dev TOOLCHAIN.txt; do
     if [ -f "$BUILD_DIR/$f" ]; then
         printf '    %-18s %s 字节\n' "$f" "$(stat -c%s "$BUILD_DIR/$f")"
     fi
@@ -99,15 +99,21 @@ c_ok "    ✓ SSH 可达"
 # 3) 传输
 # ---------------------------------------------------------------------------
 # 注意这里是**从开发机推**。板上没有仓库, 也没有交叉编译器。
-c_info "=== 传输 ==="
+#
+# 板上目标目录: 统一用 ~/Desktop (团队约定)。板上不编译, 一切都从开发机推过来,
+# 固定一个目录能避免"产物到底传哪儿了"这类问题。
+REMOTE_DIR="Desktop"
+c_info "=== 传输到板子的 ~/$REMOTE_DIR ==="
 FILES=()
-for f in halloworld-gui halloworld TOOLCHAIN.txt; do
+for f in deffire-gui-dev deffire-dev TOOLCHAIN.txt; do
     [ -f "$BUILD_DIR/$f" ] && FILES+=("$BUILD_DIR/$f")
 done
 FILES+=("$HERE/setup-board-permissions.sh")
 
-scp -q "${SSH_OPTS[@]}" "${FILES[@]}" "$TARGET:~/"
-c_ok "    ✓ 已传输到 ~/"
+# 先确保目标目录存在 —— scp 不会自己建目录, 目录不在就直接失败。
+ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p ~/$REMOTE_DIR"
+scp -q "${SSH_OPTS[@]}" "${FILES[@]}" "$TARGET:~/$REMOTE_DIR/"
+c_ok "    ✓ 已传输到 ~/$REMOTE_DIR/"
 
 # ---------------------------------------------------------------------------
 # 4) 权限检查
@@ -137,7 +143,7 @@ if printf '%s' "$PERM_OUT" | grep -q '^DENY'; then
     c_warn "⚠ 有设备文件当前用户不可写 —— 界面里点 LED / 蜂鸣器按钮不会有反应。"
     c_warn "  在板子上执行一次 (只需一次, 重启后仍生效):"
     echo
-    echo "      sudo bash ~/setup-board-permissions.sh $(printf '%s' "$TARGET" | cut -d@ -f1)"
+    echo "      sudo bash ~/$REMOTE_DIR/setup-board-permissions.sh $(printf '%s' "$TARGET" | cut -d@ -f1)"
     echo "      sudo reboot"
     echo
     c_warn "  原因与验证见 WARNING.md 的「sysfs 权限」一节。"
@@ -152,10 +158,10 @@ if [ "$DO_RUN" -eq 1 ]; then
     c_info "=== 启动 GUI (DISPLAY=:0) ==="
     # 用 exec 让远程进程占住这个 ssh 会话; Ctrl+C 结束。
     # 板上有 LXDE/Openbox, 所以窗口会被 WM 接管 —— 全屏问题见 WARNING.md C-7。
-    ssh -t "${SSH_OPTS[@]}" "$TARGET" 'cd ~ && DISPLAY=:0 ./halloworld-gui'
+    ssh -t "${SSH_OPTS[@]}" "$TARGET" "cd ~/$REMOTE_DIR && DISPLAY=:0 ./deffire-gui-dev"
 else
     echo
     c_info "启动:"
-    echo "    ssh -t $TARGET 'cd ~ && DISPLAY=:0 ./halloworld-gui'"
+    echo "    ssh -t $TARGET 'cd ~/$REMOTE_DIR && DISPLAY=:0 ./deffire-gui-dev'"
     echo "    或者加 --run 让本脚本启动。"
 fi

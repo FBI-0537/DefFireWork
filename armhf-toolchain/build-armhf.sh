@@ -230,7 +230,7 @@ fi
 c_info "=== 取回产物 ==="
 mkdir -p "$BUILD_DIR"
 CID="$("$RUNTIME" create "$BUILD_IMAGE")"
-for f in halloworld-gui halloworld; do
+for f in deffire-gui-dev deffire-dev; do
     if "$RUNTIME" cp "$CID:/work/build-armhf/$f" "$BUILD_DIR/$f" 2>/dev/null; then
         printf '  ✓ %s\n' "$f"
     fi
@@ -241,7 +241,7 @@ done
 # ---------------------------------------------------------------------------
 # 产物隔离: 写工具链指纹
 #
-# 为什么需要: 同一个 halloworld-gui 可能来自 Docker(glibc/gcc) 或 Zig 或板上原生
+# 为什么需要: 同一个 deffire-gui-dev 可能来自 Docker(glibc/gcc) 或 Zig 或板上原生
 # 编译。三者编译器与 libc 都不同, 出问题时第一步就是确认"这个二进制是谁编的"。
 # 指纹文件随产物一起走, 板上也能查。
 # ---------------------------------------------------------------------------
@@ -263,7 +263,7 @@ sed 's/^/    /' "$BUILD_DIR/TOOLCHAIN.txt"
 echo
 c_info "=== 产物 ==="
 FOUND=0
-for exe in halloworld-gui halloworld; do
+for exe in deffire-gui-dev deffire-dev; do
     f="$BUILD_DIR/$exe"
     if [ -f "$f" ]; then
         printf '  %-20s %9s 字节  %s\n' "$exe" "$(stat -c %s "$f")" \
@@ -280,7 +280,7 @@ fi
 if [ -x "$HOME/.local/bin/arm-linux-gnueabihf-readelf" ]; then
     echo
     echo "  动态依赖:"
-    LC_ALL=C "$HOME/.local/bin/arm-linux-gnueabihf-readelf" -d "$BUILD_DIR/halloworld-gui" 2>/dev/null \
+    LC_ALL=C "$HOME/.local/bin/arm-linux-gnueabihf-readelf" -d "$BUILD_DIR/deffire-gui-dev" 2>/dev/null \
         | grep NEEDED | sed 's/^/    /' || true
 fi
 
@@ -288,11 +288,13 @@ echo
 c_ok "✓ 完成: $BUILD_DIR"
 cat <<'NOTE'
 
-  部署到板子:
-      scp build-armhf/halloworld-gui root@<板子IP>:~/
-      scp build-armhf/TOOLCHAIN.txt  root@<板子IP>:~/
-      ssh root@<板子IP> 'DISPLAY=:0 ./halloworld-gui'
+  部署到板子 (板上统一用 ~/Desktop):
+      scp build-armhf/deffire-gui-dev build-armhf/TOOLCHAIN.txt fbi@<板子IP>:~/Desktop/
+      ssh -t fbi@<板子IP> 'cd ~/Desktop && DISPLAY=:0 ./deffire-gui-dev'
+
+      或者一步到位 (会先建目录, 传完还会检查 LED/蜂鸣器的写权限):
+      ./armhf-toolchain/deploy-to-board.sh fbi@<板子IP>
 
   板上自检(确认产物与板子匹配):
-      ./armhf-toolchain/verify-on-board.sh root@<板子IP>
+      ./armhf-toolchain/verify-on-board.sh fbi@<板子IP>
 NOTE

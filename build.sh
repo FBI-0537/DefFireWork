@@ -60,16 +60,16 @@ do_native() {
     c_info "-------- ctest --------"
     ctest --test-dir "$NATIVE_DIR" --output-on-failure
     c_ok "✓ 完成:"
-    echo "    控制台程序 : $NATIVE_DIR/halloworld       (打印 hallo world)"
-    echo "    图形界面   : $NATIVE_DIR/halloworld-gui   (开窗口, 需 DISPLAY)"
+    echo "    控制台程序 : $NATIVE_DIR/deffire-dev       (打印 hallo world)"
+    echo "    图形界面   : $NATIVE_DIR/deffire-gui-dev   (开窗口, 需 DISPLAY)"
 }
 
 # 控制台程序 —— 注意它不开窗口
 do_run() {
     c_info "======== 控制台程序 (不开窗口) ========"
     do_native
-    c_info "-------- 运行 halloworld --------"
-    ./"$NATIVE_DIR"/halloworld
+    c_info "-------- 运行 deffire-dev --------"
+    ./"$NATIVE_DIR"/deffire-dev
 }
 
 # GUI —— 真正开窗口的那个
@@ -80,7 +80,7 @@ do_gui() {
 
     # 只构建 GUI 目标, 不用等控制台程序和测试
     cmake -B "$NATIVE_DIR" -S . -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
-    cmake --build "$NATIVE_DIR" -j "$JOBS" --target halloworld-gui
+    cmake --build "$NATIVE_DIR" -j "$JOBS" --target deffire-gui-dev
 
     local arg="--windowed"
     [[ "$mode" == "full" ]] && arg=""
@@ -93,7 +93,7 @@ do_gui() {
     fi
 
     c_info "-------- 启动窗口 $arg --------"
-    exec ./"$NATIVE_DIR"/halloworld-gui $arg
+    exec ./"$NATIVE_DIR"/deffire-gui-dev $arg
 }
 
 do_armhf() {
@@ -112,7 +112,7 @@ do_armhf() {
 
 verify_armhf() {
     c_info "-------- armhf 产物验证 --------"
-    local exe="$ARMHF_DIR/halloworld"
+    local exe="$ARMHF_DIR/deffire-dev"
 
     [[ -f "$exe" ]] || { c_err "✗ 缺少 $exe"; exit 1; }
 
@@ -129,20 +129,20 @@ verify_armhf() {
     fi
 
     # 这条提示很重要: armhf 交叉编译只覆盖纯逻辑层 + 控制台程序。
-    # GUI (halloworld-gui) 依赖 libX11, 而 Zig 不带任何 X11 头文件,
+    # GUI (deffire-gui-dev) 依赖 libX11, 而 Zig 不带任何 X11 头文件,
     # 交叉编译需要目标板的完整 ARM sysroot —— 所以它被自动跳过了。
     cat <<'NOTE'
 
-    ⚠️ 注意: 这里没有产出 GUI (halloworld-gui)
+    ⚠️ 注意: 这里没有产出 GUI (deffire-gui-dev)
 
-      交叉编译只覆盖: libfirecontrol.a (纯逻辑) + halloworld (控制台)
+      交叉编译只覆盖: libfirecontrol.a (纯逻辑) + deffire-dev (控制台)
       GUI 依赖 libX11, 而 Zig 不带 X11 头文件, 交叉编译需要目标板的
       ARM 版 libX11 sysroot —— 所以 CMake 自动跳过它。
 
       GUI 必须在板子上原生编译:
           sudo apt install g++ make pkg-config libx11-dev
           cmake -B build -S . && cmake --build build -j
-          DISPLAY=:0 ./build/halloworld-gui
+          DISPLAY=:0 ./build/deffire-gui-dev
 
       另外: 上面这个 ARM 控制台程序在板子上也跑不了 —— 它是 musl 静态链接的,
       而板子是 Debian/glibc。Debian 上直接用板上 g++ 编译即可。
@@ -193,7 +193,7 @@ do_gui_armhf() {
     c_info "======== 交叉编译 GUI (armhf), 走 Docker ========"
     "$script" "$@"
 
-    local exe="$ARMHF_DIR/halloworld-gui"
+    local exe="$ARMHF_DIR/deffire-gui-dev"
     [ -f "$exe" ] || { c_err "✗ 没有产出 $exe"; exit 1; }
 
     if [ -f "$ARMHF_DIR/TOOLCHAIN.txt" ]; then

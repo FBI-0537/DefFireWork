@@ -56,10 +56,10 @@ target_include_directories(firecontrol PUBLIC
 # ---------------------------------------------------------------------------
 # 可执行文件
 # ---------------------------------------------------------------------------
-add_executable(halloworld
+add_executable(deffire-dev
     src/main.cpp
 )
-target_link_libraries(halloworld PRIVATE firecontrol)
+target_link_libraries(deffire-dev PRIVATE firecontrol)
 
 # ---------------------------------------------------------------------------
 # armhf 产物的瘦身
@@ -70,12 +70,12 @@ target_link_libraries(halloworld PRIVATE firecontrol)
 # 不加这一条, Release 产物会带 debug_info, 大约 5.7 MB; 加了之后约 300 KB。
 # ---------------------------------------------------------------------------
 if(IS_CROSS_BUILD)
-    target_link_options(halloworld PRIVATE -s)
+    target_link_options(deffire-dev PRIVATE -s)
     message(STATUS "armhf 优化: 链接期 -s 剥离符号 (本机无法事后 strip)")
 endif()
 
 # ---------------------------------------------------------------------------
-# GUI 可执行文件 —— LVGL 图形界面 (halloworld-gui)
+# GUI 可执行文件 —— LVGL 图形界面 (deffire-gui-dev)
 #
 # 维护分工: 这一节的 LVGL 集成由 FBI-0537 负责; 上面的纯逻辑层、控制台程序与
 #           cmake/toolchain-armhf.cmake 来自 Skywindfox, 改动时保留其注释与编译方式。
@@ -102,7 +102,8 @@ endif()
 #       注: cmake/toolchain-armhf.cmake (Zig 版) 只用于**纯逻辑层与控制台程序**,
 #       它没有 X11/freetype, 用它开 WITH_GUI=ON 会在下面直接报错。
 #
-# 命名说明: 不能叫 halloworld, 上面那个控制台程序已经占了。
+# 命名说明: 两个目标名字都不能重复 —— 控制台是 deffire-dev, GUI 是 deffire-gui-dev。
+#         后缀 -dev 表示当前是开发阶段的构建, 正式版去掉即可。
 # ---------------------------------------------------------------------------
 set(WITH_GUI "AUTO" CACHE STRING "是否构建 LVGL GUI (ON / OFF / AUTO)")
 set_property(CACHE WITH_GUI PROPERTY STRINGS ON OFF AUTO)
@@ -168,13 +169,13 @@ else()
         target_include_directories(lvgl PRIVATE ${GUI_DEPS_INCLUDE_DIRS})
 
         set(HAVE_GUI TRUE)
-        add_executable(halloworld-gui
+        add_executable(deffire-gui-dev
             src/gui.cpp
         )
-        target_include_directories(halloworld-gui PRIVATE ${GUI_DEPS_INCLUDE_DIRS})
-        target_compile_options(halloworld-gui PRIVATE ${GUI_DEPS_CFLAGS_OTHER})
-        target_link_directories(halloworld-gui PRIVATE ${GUI_DEPS_LIBRARY_DIRS})
-        target_link_libraries(halloworld-gui PRIVATE
+        target_include_directories(deffire-gui-dev PRIVATE ${GUI_DEPS_INCLUDE_DIRS})
+        target_compile_options(deffire-gui-dev PRIVATE ${GUI_DEPS_CFLAGS_OTHER})
+        target_link_directories(deffire-gui-dev PRIVATE ${GUI_DEPS_LIBRARY_DIRS})
+        target_link_libraries(deffire-gui-dev PRIVATE
             firecontrol                # 业务/硬件层: led_on / led_off 等
             lvgl::lvgl                 # LVGL 本体
             ${GUI_DEPS_LIBRARIES}      # libX11 + libfreetype
@@ -185,7 +186,7 @@ else()
         # 本机无法事后 strip ARM (binutils 只编了 x86 BFD 后端), 所以瘦身只能
         # 在链接时做。
         if(IS_CROSS_BUILD)
-            target_link_options(halloworld-gui PRIVATE -s)
+            target_link_options(deffire-gui-dev PRIVATE -s)
         endif()
 
         message(STATUS "GUI: LVGL (third_party) + pkg-config ${GUI_DEPS_VERSION}")
@@ -236,7 +237,7 @@ endif()
 # ---------------------------------------------------------------------------
 # 工具链指纹 —— 产物隔离
 #
-# 同一个 halloworld-gui 可能来自 Docker / Zig / 板上原生编译, 三者编译器与 libc
+# 同一个 deffire-gui-dev 可能来自 Docker / Zig / 板上原生编译, 三者编译器与 libc
 # 都不同。把指纹写进构建目录, 有问题时第一眼就能确认来源; 指纹随产物一起
 # 拷到板上, 板上也能查 (见 armhf-toolchain/verify-on-board.sh)。
 #

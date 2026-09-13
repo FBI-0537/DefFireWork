@@ -24,7 +24,7 @@
                 "clear": true,
                 "close": true
             },
-            "detail": "配置 + 构建原生 x86-64。产物在 build/halloworld。这是默认任务 (Ctrl+Shift+B)。"
+            "detail": "配置 + 构建原生 x86-64。产物在 build/deffire-dev。这是默认任务 (Ctrl+Shift+B)。"
         },
         {
             "label": "CMake: 构建并运行",
@@ -32,7 +32,7 @@
             "command": "bash",
             "args": [
                 "-c",
-                "cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && cmake --build build -j $(nproc) && echo '-------- 运行 --------' && ./build/halloworld"
+                "cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && cmake --build build -j $(nproc) && echo '-------- 运行 --------' && ./build/deffire-dev"
             ],
             "group": "build",
             "problemMatcher": [
@@ -82,7 +82,7 @@
                 "clear": true,
                 "close": true
             },
-            "detail": "Debug 构建 (-g -O0), 产物在 build-debug/halloworld, 配合 gdb 调试。"
+            "detail": "Debug 构建 (-g -O0), 产物在 build-debug/deffire-dev, 配合 gdb 调试。"
         },
         {
             "label": "CMake: 构建 armhf",
@@ -102,7 +102,7 @@
                 "clear": true,
                 "close": true
             },
-            "detail": "交叉编译到 armhf (musl 静态链接, 零依赖)。产物在 build-armhf/halloworld, 拷到板子上直接跑。首次编译较慢 (Zig 要从源码构建 libc++)。注意: 这个不含 GUI。"
+            "detail": "交叉编译到 armhf (musl 静态链接, 零依赖)。产物在 build-armhf/deffire-dev, 拷到板子上直接跑。首次编译较慢 (Zig 要从源码构建 libc++)。注意: 这个不含 GUI。"
         },
         {
             "label": "CMake: 构建 GUI 并运行 (原生预览)",
@@ -110,7 +110,7 @@
             "command": "bash",
             "args": [
                 "-c",
-                "cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && cmake --build build -j $(nproc) --target halloworld-gui && echo '-------- 运行 (窗口模式, 1024x600) --------' && ./build/halloworld-gui --windowed"
+                "cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && cmake --build build -j $(nproc) --target deffire-gui-dev && echo '-------- 运行 (窗口模式, 1024x600) --------' && ./build/deffire-gui-dev --windowed"
             ],
             "group": "build",
             "problemMatcher": [
@@ -142,7 +142,7 @@
                 "clear": true,
                 "focus": true
             },
-            "detail": "交叉编译 X11 GUI 到 armhf。需要 docker 或 podman (走 armhf-toolchain/ 的统一环境, 不再需要手搭 sysroot)。产物 build-armhf/halloworld-gui 不能在开发机运行, 要拷到板子 —— 用 ./armhf-toolchain/deploy-to-board.sh。"
+            "detail": "交叉编译 X11 GUI 到 armhf。需要 docker 或 podman (走 armhf-toolchain/ 的统一环境, 不再需要手搭 sysroot)。产物 build-armhf/deffire-gui-dev 不能在开发机运行, 要拷到板子 —— 用 ./armhf-toolchain/deploy-to-board.sh。"
         },
         {
             "label": "CMake: 查看 armhf 产物架构",
@@ -150,7 +150,7 @@
             "command": "bash",
             "args": [
                 "-c",
-                "f=build-armhf/halloworld; [ -f \"$f\" ] || { echo '找不到 build-armhf/halloworld, 先跑 ./build.sh gui-armhf'; exit 0; }; file \"$f\"; R=$(command -v readelf || command -v arm-linux-gnueabihf-readelf); if [ -n \"$R\" ]; then LC_ALL=C \"$R\" -h \"$f\" | grep -E 'Class:|Machine:|Flags:'; else echo '找不到 readelf (装 binutils)'; fi; echo \"体积: $(stat -c %s \"$f\") 字节\""
+                "f=build-armhf/deffire-dev; [ -f \"$f\" ] || { echo '找不到 build-armhf/deffire-dev, 先跑 ./build.sh gui-armhf'; exit 0; }; file \"$f\"; R=$(command -v readelf || command -v arm-linux-gnueabihf-readelf); if [ -n \"$R\" ]; then LC_ALL=C \"$R\" -h \"$f\" | grep -E 'Class:|Machine:|Flags:'; else echo '找不到 readelf (装 binutils)'; fi; echo \"体积: $(stat -c %s \"$f\") 字节\""
             ],
             "problemMatcher": [],
             "presentation": {

@@ -65,8 +65,8 @@
 
 | 目标 | 源文件 | 说明 | 能否交叉编译 |
 |---|---|---|---|
-| `halloworld-gui` | `src/gui.cpp` | **LVGL 图形界面**（X11 后端） | ✅ |
-| `halloworld` | `src/main.cpp` | 控制台程序，打印 `hallo world` | ✅ |
+| `deffire-gui-dev` | `src/gui.cpp` | **LVGL 图形界面**（X11 后端） | ✅ |
+| `deffire-dev` | `src/main.cpp` | 控制台程序，打印 `hallo world` | ✅ |
 | `test_greeting` | `tests/test_greeting.cpp` | 单元测试，`ctest` 调用 | ❌ 交叉产物跑不了 |
 | `libfirecontrol.a` | `src/greeting.cpp` | 纯逻辑层静态库，上面几个都链接它 | ✅ |
 
@@ -130,7 +130,7 @@ BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
 可以交叉编译**纯逻辑层与控制台程序**，速度快，但**没有 X11/freetype，编不了 GUI**。
 
 ```bash
-./build.sh armhf        # 产出 build-armhf/ 里的逻辑层与 halloworld
+./build.sh armhf        # 产出 build-armhf/ 里的逻辑层与 deffire-dev
 armhf-env               # 检查这套环境是否就绪
 ```
 
@@ -195,8 +195,8 @@ sudo apt install xinput x11-utils x11-apps                # 排查触摸/显示�
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
-./build/halloworld-gui --windowed      # 窗口模式（1024x600）
-./build/halloworld-gui                 # 全屏
+./build/deffire-gui-dev --windowed      # 窗口模式（1024x600）
+./build/deffire-gui-dev                 # 全屏
 
 # armhf GUI：不要手工拼 cmake 命令，用工具链入口（见第 3 节）
 ./armhf-toolchain/build-armhf.sh
@@ -205,21 +205,23 @@ ctest --test-dir build --output-on-failure
 ### 5.3 部署到板子
 
 项目是**开发机交叉编译、产物拷到板上跑**，板上不编译（性能不够）。所以没有
-"板上 `git pull`"这条路，一切都从开发机推：
+"板上 `git pull`"这条路，一切都从开发机推。
+
+**板上统一用 `~/Desktop`**：所有产物和脚本都放那里。
 
 ```bash
 ./armhf-toolchain/verify-on-board.sh fbi@<板子IP>        # 上板前先校验产物与本板匹配
-./armhf-toolchain/deploy-to-board.sh fbi@<板子IP>        # 传输产物 + 权限脚本
+./armhf-toolchain/deploy-to-board.sh fbi@<板子IP>        # 传输产物 + 权限脚本到 ~/Desktop
 ./armhf-toolchain/deploy-to-board.sh --run fbi@<板子IP>  # 传完直接启动
 ```
 
-必须显式给 `用户@IP`：开发机上通常解析不了板子的短主机名。
+必须显式给 `用户@IP`：开发机上通常解析不了板子的短主机名。板子的普通用户是 `fbi`。
 
 **首次部署还要在板上做一次权限配置**（否则界面里点 LED / 蜂鸣器没反应）：
 
 ```bash
 ssh fbi@<板子IP>
-sudo bash ~/setup-board-permissions.sh fbi
+sudo bash ~/Desktop/setup-board-permissions.sh fbi
 sudo reboot
 ```
 
@@ -354,7 +356,7 @@ FireControlApp/
 ├── src/
 │   ├── greeting.h / greeting.cpp   纯逻辑层 → libfirecontrol.a
 │   ├── main.cpp                    控制台程序入口
-│   └── gui.cpp                     LVGL 图形界面 → halloworld-gui
+│   └── gui.cpp                     LVGL 图形界面 → deffire-gui-dev
 ├── third_party/lvgl/               LVGL v9.2.3 源码（已裁掉 docs/demos/tests/examples）
 ├── tests/test_greeting.cpp
 └── .vscode/
@@ -394,10 +396,10 @@ build-debug/         Debug 构建
 | 项目 | 结果 |
 |---|---|
 | 原生构建 | 0 warning，`ctest` 1/1 |
-| 原生 GUI | `halloworld-gui` 约 900 KB，1024×600 窗口正常 |
+| 原生 GUI | `deffire-gui-dev` 约 900 KB，1024×600 窗口正常 |
 | 容器镜像构建 | ✅ 通过（`bookworm-slim` + gcc-arm 12 + cmake 3.25.1） |
 | 镜像自检 | ✅ 能交叉编译 X11+FreeType 的 armhf 程序；pkg-config 指向 armhf |
-| 容器内交叉编译 | ✅ LVGL 全量 + `halloworld-gui` 链接成功 |
+| 容器内交叉编译 | ✅ LVGL 全量 + `deffire-gui-dev` 链接成功 |
 | **armhf 产物** | **399,624 字节**，`ELF32 / ARM / hard-float`，依赖 `libX11` / `libfreetype` / `libgcc_s` / `libc` |
 | 上板实测（LVGL 版） | ❌ **还没做** —— 见 [WARNING.md A-1](WARNING.md#a-当前遗留问题) |
 | 上板实测（老 Xlib+Xft 版） | ✅ 曾通过（窗口正常、中文正常），但该版本已被 LVGL 版取代 |
@@ -410,7 +412,7 @@ build-debug/         Debug 构建
 - [ ] 板上实测触摸：点【退出】与占位按钮的命中是否准确、坐标是否偏移
 - [ ] 确认全屏下字号观感（`kBigFontPx` / `kSmallFontPx`）
 - [ ] 给字体候选表补上 Fedora 的路径（方便开发机预览中文，见 WARNING.md A-2）
-- [ ] **实测 Openbox 下是否真全屏**：板上跑一次无参 `./halloworld-gui`，看窗口有没有被
+- [ ] **实测 Openbox 下是否真全屏**：板上跑一次无参 `./deffire-gui-dev`，看窗口有没有被
       加标题栏 / 留边距。没铺满就要发 `_NET_WM_STATE_FULLSCREEN`（见 WARNING.md C-7）
 - [ ] 填充 4 个占位按钮的实际功能
 - [ ] 传感器模块（当前 0%）

@@ -25,11 +25,11 @@
 //   当前这一版由 FBI-0537 重构到 LVGL —— 界面结构、字体加载、事件分发都换成
 //   LVGL 那一套; "不用 GTK/Qt"这条理由对 LVGL 同样成立 (见 README 第 5 节)。
 //
-// 编译: 见 CMakeLists.txt, 目标 halloworld-gui
+// 编译: 见 CMakeLists.txt, 目标 deffire-gui-dev
 // 运行:
-//     ./halloworld-gui                 全屏 —— 板上用这个 (按屏幕实际尺寸铺满)
-//     ./halloworld-gui --windowed      1024x600 窗口 —— 开发机预览用
-//     ./halloworld-gui --font=<文件>   指定字体文件 (默认按候选表自动找)
+//     ./deffire-gui-dev                 全屏 —— 板上用这个 (按屏幕实际尺寸铺满)
+//     ./deffire-gui-dev --windowed      1024x600 窗口 —— 开发机预览用
+//     ./deffire-gui-dev --font=<文件>   指定字体文件 (默认按候选表自动找)
 
 #include <lvgl.h>
 
@@ -127,7 +127,7 @@ const char *pickFontFile(const char *override_path)
     std::fprintf(stderr,
                  "警告: 找不到中文字体, 界面上的汉字会显示成方框。\n"
                  "      板上装一个: sudo apt install fonts-wqy-zenhei\n"
-                 "      或指定文件: ./halloworld-gui --font=/path/to/font.ttc\n");
+                 "      或指定文件: ./deffire-gui-dev --font=/path/to/font.ttc\n");
     return nullptr;
 }
 

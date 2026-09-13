@@ -111,7 +111,7 @@ if ($LASTEXITCODE -ne 0) { Fail "容器内构建失败"; exit 1 }
 # docker 没有"从镜像直接拷文件"的命令, 标准做法: create 一个容器再 cp (create 不启动, 很快)
 Info "=== 取回产物 ==="
 $cid = (& docker create $BuildImage).Trim()
-foreach ($exe in @("halloworld-gui", "halloworld")) {
+foreach ($exe in @("deffire-gui-dev", "deffire-dev")) {
     & docker cp "${cid}:/work/build-armhf/$exe" (Join-Path $BuildDir $exe) 2>$null
     if ($LASTEXITCODE -eq 0) { Write-Host "  ✓ $exe" }
 }
@@ -140,7 +140,7 @@ $stamp | ForEach-Object { "    $_" }
 Write-Host ""
 Info "=== 产物 ==="
 $found = $false
-foreach ($exe in @("halloworld-gui", "halloworld")) {
+foreach ($exe in @("deffire-gui-dev", "deffire-dev")) {
     $f = Join-Path $BuildDir $exe
     if (Test-Path $f) {
         $sz = (Get-Item $f).Length
@@ -154,11 +154,11 @@ Write-Host ""
 Ok "✓ 完成: $BuildDir"
 Write-Host @"
 
-  部署到板子:
-      scp build-armhf/halloworld-gui root@<板子IP>:~/
-      scp build-armhf/TOOLCHAIN.txt  root@<板子IP>:~/
-      ssh root@<板子IP> 'DISPLAY=:0 ./halloworld-gui'
+  部署到板子 (板上统一用 ~/Desktop):
+      scp build-armhf/deffire-gui-dev build-armhf/TOOLCHAIN.txt fbi@<板子IP>:~/Desktop/
+      ssh -t fbi@<板子IP> 'cd ~/Desktop && DISPLAY=:0 ./deffire-gui-dev'
 
   板上自检(确认产物与板子匹配):
-      bash armhf-toolchain/verify-on-board.sh root@<板子IP>     # 在 Linux 上
+      在 Linux / WSL / Git Bash 里跑:
+      bash armhf-toolchain/verify-on-board.sh fbi@<板子IP>
 "@

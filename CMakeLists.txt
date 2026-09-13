@@ -39,9 +39,14 @@ endif()
 #
 # 把逻辑放库里的好处: 主程序和单元测试链接同一份代码,
 # 而且这一层可以交叉编译到 armhf (不依赖任何平台特有库)。
+#
+# 新增 .cpp 就在这里登记 —— CMake 不自动扫描目录。
+# 只要源文件放在 src/ 下、且被登记到这里或下面的 add_executable,
+# 就能被编译; 头文件不用单独登记 (target_include_directories 已含 src/)。
 # ---------------------------------------------------------------------------
 add_library(firecontrol
     src/greeting.cpp
+    src/usetools.cpp
 )
 target_include_directories(firecontrol PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src

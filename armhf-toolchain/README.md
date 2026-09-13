@@ -152,6 +152,10 @@ BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
     ./armhf-toolchain/build-armhf.sh
 ```
 
+```powershell
+.\armhf-toolchain\build-armhf.ps1 -BaseImage docker.m.daocloud.io/library/debian:bookworm-slim
+```
+
 ---
 
 ## 构建方式：为什么用 COPY 而不是挂载

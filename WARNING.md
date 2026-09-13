@@ -151,6 +151,84 @@ Error: Unknown instruction: "RM"
 
 改完建议扫一眼每个 RUN 块的行尾。
 
+### B-16. 基础镜像名不能从 `FROM` 行取（`build.sh gui-armhf` 直接失败）
+
+**症状**：`./build.sh gui-armhf` 一上来就失败，但报的像是网络问题：
+
+```
+    预检基础镜像可达性: ${BASE}
+✗ 拉不到基础镜像: ${BASE}
+  常见原因:
+    - 网络受限, 访问不了镜像仓库 (docker.io / quay.io 等)
+```
+
+**根因**：不是网络。Dockerfile 写的是
+
+```dockerfile
+ARG BASE=debian:bookworm-slim
+FROM ${BASE}
+```
+
+而 `build-armhf.sh` 从 `FROM` 行取镜像名：
+
+```sh
+BASE_IMAGE="$(grep -iE '^FROM' Dockerfile | head -1 | awk '{print $NF}')"
+```
+
+`FROM ${BASE}` 的最后一个字段是**字面量** `${BASE}`（一个 build-arg 引用，不是镜像名），
+于是脚本去 pull 一个叫 `${BASE}` 的镜像，必然失败。`ARG BASE=` 那行的默认值才是真名。
+
+**修复**：`dockerfile_base_default()` 优先解析 `ARG BASE=` 的默认值，
+只有 `FROM` 本来就是字面量（如 `FROM debian:bookworm-slim`）时才直接用它。
+
+**同一类错误的另一处**：`build-armhf.ps1` 曾经完全没传 `--build-arg BASE=`，
+且把环境镜像名 `$Image` 传给编译镜像的 `BASE_IMAGE`。两个 Dockerfile 的 ARG 名不同：
+
+| | 环境 `Dockerfile` | 编译 `Dockerfile.build-armhf` |
+|---|---|---|
+| ARG 名 | `BASE` | `BASE_IMAGE` |
+| 默认值 | `debian:bookworm-slim` | `firecontrol-armhf:bookworm` |
+
+改这类代码时先核对 ARG 名，不要凭印象传。
+
+### B-17. `build.sh` 检查的产物目录和实际产物目录不一致
+
+**症状**：交叉编译明明成功（产物、指纹都正常打印），最后却报：
+
+```
+✗ 没有产出 build-gui-armhf/halloworld-gui
+```
+
+**根因**：`build.sh` 里定义了 `GUI_ARMHF_DIR="build-gui-armhf"`，但
+`armhf-toolchain/build-armhf.sh` 里写死了 `BUILD_DIR="$PROJECT_ROOT/build-armhf"`。
+两个路径都不在 `build-gui-armhf`，那个目录从来没被创建过。
+
+**修复**：armhf 产物统一用 `build-armhf` —— Zig 版（`do_armhf`）和 Docker 版
+（`do_gui_armhf`）都写这里，检查也统一指向 `ARMHF_DIR`。
+
+**注意**：两个版本共用一个目录，来回切换时 CMake 的工具链指纹检查会报警告
+（见 `CMakeLists.txt`）。那时删掉 `build-armhf` 重新构建即可。
+
+### B-18. `build-armhf.ps1` 的 UTF-8 BOM 不能丢
+
+这个文件带 UTF-8 BOM，**不是可有可无的**：PowerShell 5.1 在没有 BOM 时按系统 ANSI
+代码页读取，文件里的中文注释会被解码成乱码，进而导致**语法错误**、脚本无法运行。
+
+用编辑器或脚本改完这个文件，务必确认 BOM 还在：
+
+```bash
+head -c3 armhf-toolchain/build-armhf.ps1 | od -An -tx1   # 应为 ef bb bf
+```
+
+丢失的话补回来：
+
+```bash
+printf '\xef\xbb\xbf' > /tmp/bom && cat armhf-toolchain/build-armhf.ps1 >> /tmp/bom \
+    && mv /tmp/bom armhf-toolchain/build-armhf.ps1
+```
+
+（很多工具——包括一些 AI 编辑工具——保存时会静默去掉 BOM。）
+
 ---
 
 ## C. 界面与字体
@@ -212,10 +290,26 @@ xev                                        # 看原始事件
 **已缓解**：忽略映射后 400 ms 内的点击（用单调时钟，不用 X 事件时间戳 ——
 `XExposeEvent` **没有 `time` 字段**，拿不到首帧时刻）。根因（X server/WM 行为）不在本项目控制内。
 
-### C-7. 板上没有窗口管理器
+### C-7. 窗口管理器：**状态未确认**
 
-所以默认全屏，自己用 `XMoveResizeWindow` 占满屏幕。窗口没有标题栏、边框、关闭按钮 ——
-关闭只能靠界面里的【退出】按钮或 `q`/`Esc`。
+早先的记录写的是"板上没有窗口管理器"，那是**推断**出来的（看到 `/dev/fb0` 归 Xorg，
+就以为没有 WM）—— **推理不成立**，Xorg 和 WM 是两个独立进程。
+
+要确认得在板上查：
+
+```sh
+ps -eo comm | grep -E 'xfwm|mutter|kwin|openbox|matchbox|marco|i3|fluxbox'
+echo "XDG_CURRENT_DESKTOP=$XDG_CURRENT_DESKTOP"
+```
+
+对有/无两种情况的预期：
+
+- **有 WM**：WM 会接管 `lv_x11_window_create()` 建的窗口。窗口可能带标题栏和边框，
+  也可能被 WM 按自己的策略摆放尺寸。界面里的【退出】按钮和 `q`/`Esc` 仍然有效。
+- **无 WM**：窗口尺寸就是代码算的屏幕实际尺寸，没有标题栏/边框/关闭按钮，
+  关闭只能靠【退出】按钮或 `q`/`Esc`。
+
+在确认之前，代码只保证"按屏幕实际尺寸建窗口"，不对 WM 做任何假设。
 
 ---
 

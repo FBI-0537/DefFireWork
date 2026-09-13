@@ -1,7 +1,7 @@
 // gui.cpp — FireControlApp 主界面 (LVGL v9 + X11 后端)
 //
 // 目标平台: 正点原子 ATK-DLMP135 (STM32MP135) + Debian 12 + Xorg :0
-//           屏幕 1024x600, 无窗口管理器, 电容触摸屏
+//           屏幕 1024x600, 电容触摸屏
 //
 // 为什么用 LVGL 的 X11 后端, 而不是它更"嵌入式"的 framebuffer 后端:
 //   板上跑着 Xorg, /dev/fb0 归 X server 管 —— 直接写 framebuffer 会和 Xorg 抢
@@ -27,7 +27,7 @@
 //
 // 编译: 见 CMakeLists.txt, 目标 halloworld-gui
 // 运行:
-//     ./halloworld-gui                 全屏 —— 板上用这个 (没有窗口管理器)
+//     ./halloworld-gui                 全屏 —— 板上用这个 (按屏幕实际尺寸铺满)
 //     ./halloworld-gui --windowed      1024x600 窗口 —— 开发机预览用
 //     ./halloworld-gui --font=<文件>   指定字体文件 (默认按候选表自动找)
 
@@ -356,7 +356,7 @@ int main(int argc, char **argv)
         } else if (std::strcmp(argv[i], "-h") == 0 ||
                    std::strcmp(argv[i], "--help") == 0) {
             std::printf("用法: %s [--windowed] [--font=<字体文件>]\n"
-                        "  (无参数)     全屏 —— 板上用这个 (没有窗口管理器)\n"
+                        "  (无参数)     全屏 —— 板上用这个 (按屏幕实际尺寸铺满)\n"
                         "  --windowed   1024x600 窗口模式 —— 开发机预览用\n"
                         "  --font=FILE  指定字体文件 (默认按候选表自动找)\n"
                         "  -h, --help   显示本帮助\n"
@@ -403,7 +403,8 @@ int main(int argc, char **argv)
     std::printf("  屏幕   : %dx%d, 深度 %d\n", screen_w, screen_h, screen_depth);
     XCloseDisplay(probe);
 
-    // 窗口尺寸算完就不变了: 板上没有窗口管理器, 没人会去缩放它。
+    // 窗口尺寸按屏幕实际尺寸算。板上是否有窗口管理器**尚未确认** (见
+    // README「板上运行环境」)。有 WM 时它可能接管这个窗口; 没有时窗口就铺满屏幕。
     const int win_w = windowed ? kBoardWidth : screen_w;
     const int win_h = windowed ? kBoardHeight : screen_h;
     std::printf("  窗口   : %dx%d%s\n", win_w, win_h,

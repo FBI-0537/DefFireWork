@@ -108,6 +108,10 @@ BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
     ./armhf-toolchain/build-armhf.sh
 ```
 
+```powershell
+.\armhf-toolchain\build-armhf.ps1 -BaseImage docker.m.daocloud.io/library/debian:bookworm-slim
+```
+
 | 文件 | 作用 |
 |---|---|
 | `Dockerfile` | 环境定义：`debian:bookworm-slim`（与板子同版本）+ Debian 官方交叉编译器 + armhf 版 X11/freetype |
@@ -142,7 +146,7 @@ armhf-env               # 检查这套环境是否就绪
 | 内存 | **437 MiB**（这是选型硬约束） |
 | 屏幕 | 1024×600（正点原子 7 寸 RGB LCD，型号 7016） |
 | 触摸 | Goodix 电容触摸屏，I2C-1 |
-| 桌面 | Xorg `:0`，**无窗口管理器** |
+| 桌面 | Xorg `:0`（窗口管理器**未确认**，见下） |
 
 **板上需要装的**：
 
@@ -284,7 +288,8 @@ build-debug/         Debug 构建
   将来若去掉 Xorg，把显示初始化换成 `lv_linux_fbdev` + `lv_evdev` 即可，界面代码不用动。
 - **中文字体走 FreeType 运行时加载**：改文案不用重新生成字库。字体按**文件路径**查找而非
   字体名，避免 fontconfig 静默替换成不含汉字的字体。
-- **默认全屏**：板上没有窗口管理器，窗口位置尺寸得自己定。
+- **默认全屏**：窗口按屏幕实际尺寸铺满。板上是否有窗口管理器**未确认**，
+  有的话 WM 可能会接管窗口尺寸。
 
 各项的设计取舍与踩过的坑在 [WARNING.md](WARNING.md)。
 
@@ -311,6 +316,7 @@ build-debug/         Debug 构建
 - [ ] 板上实测触摸：点【退出】与占位按钮的命中是否准确、坐标是否偏移
 - [ ] 确认全屏下字号观感（`kBigFontPx` / `kSmallFontPx`）
 - [ ] 给字体候选表补上 Fedora 的路径（方便开发机预览中文，见 WARNING.md A-2）
-- [ ] 决定是否需要极简窗口管理器（`matchbox` / `openbox`），否则所有程序只能全屏
+- [ ] **确认板上有没有窗口管理器**（板上执行 `ps -eo comm | grep -E 'xfwm|mutter|kwin|openbox|matchbox'`），
+      再决定要不要装极简 WM
 - [ ] 填充 4 个占位按钮的实际功能
 - [ ] 传感器模块（当前 0%）

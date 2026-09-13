@@ -18,8 +18,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 NATIVE_DIR="build"
+# armhf 产物只有一个目录: Zig 版(do_armhf)和 Docker 版(do_gui_armhf)都写这里。
+# 两个版本不会同时存在, 切换时 CMake 的工具链指纹检查会给出警告(见 CMakeLists.txt)。
+# 注意: armhf-toolchain/build-armhf.sh 里写死了 build-armhf, 不要改成别的名字,
+#       否则这里找不到产物。
 ARMHF_DIR="build-armhf"
-GUI_ARMHF_DIR="build-gui-armhf"
 TOOLCHAIN="cmake/toolchain-armhf.cmake"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 JOBS="$(nproc 2>/dev/null || echo 4)"
@@ -147,8 +150,8 @@ NOTE
 }
 
 do_clean() {
-    rm -rf "$NATIVE_DIR" "$ARMHF_DIR" "$GUI_ARMHF_DIR"
-    c_ok "✓ 已清理 $NATIVE_DIR $ARMHF_DIR $GUI_ARMHF_DIR"
+    rm -rf "$NATIVE_DIR" "$ARMHF_DIR"
+    c_ok "✓ 已清理 $NATIVE_DIR $ARMHF_DIR"
 }
 
 # ---------------------------------------------------------------------------
@@ -187,13 +190,13 @@ do_gui_armhf() {
     c_info "======== 交叉编译 GUI (armhf), 走 Docker ========"
     "$script" "$@"
 
-    local exe="$GUI_ARMHF_DIR/halloworld-gui"
+    local exe="$ARMHF_DIR/halloworld-gui"
     [ -f "$exe" ] || { c_err "✗ 没有产出 $exe"; exit 1; }
 
-    if [ -f "$GUI_ARMHF_DIR/TOOLCHAIN.txt" ]; then
+    if [ -f "$ARMHF_DIR/TOOLCHAIN.txt" ]; then
         echo
         c_info "-------- 工具链指纹 (产物隔离用) --------"
-        sed 's/^/    /' "$GUI_ARMHF_DIR/TOOLCHAIN.txt"
+        sed 's/^/    /' "$ARMHF_DIR/TOOLCHAIN.txt"
     fi
 
     echo

@@ -34,6 +34,33 @@ c_info() { printf '\033[36m%s\033[0m\n' "$*"; }
 c_ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
 c_err()  { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 
+# 从 Dockerfile 解析基础镜像名。
+#
+# 只认 `ARG BASE=xxx` 这种带默认值的写法 —— Dockerfile 用的是
+#     ARG BASE=debian:bookworm-slim
+#     FROM ${BASE}
+# 而 `FROM ${BASE}` 里没有镜像名, 只有一个引用。若 Dockerfile 写成
+# `FROM debian:bookworm-slim` 这种字面量, 这里也一并支持。
+dockerfile_base_default() {
+    local dockerfile="$DOCKERFILE_DIR/Dockerfile"
+    local from_line arg_line
+
+    from_line="$(grep -iE '^[[:space:]]*FROM[[:space:]]' "$dockerfile" | head -1 || true)"
+    # 去掉末尾可能存在的 "AS stage" 别名, 取镜像名
+    from_line="$(printf '%s' "$from_line" | awk '{print $2}')"
+
+    case "$from_line" in
+        *'${'*|*'$'*)
+            # FROM 是变量引用, 真正的名字在 `ARG BASE=` 的默认值里
+            arg_line="$(grep -iE '^[[:space:]]*ARG[[:space:]]+BASE=' "$dockerfile" | head -1 || true)"
+            printf '%s' "$arg_line" | sed -E 's/^[[:space:]]*ARG[[:space:]]+BASE=//I' | awk '{print $1}'
+            ;;
+        *)
+            printf '%s' "$from_line"
+            ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 # 挂载宿主源码目录所需的参数
 #
@@ -103,15 +130,25 @@ if ! image_exists; then
     c_info "    (首次较慢; 之后除非 --rebuild 否则复用)"
 
     # -----------------------------------------------------------------------
-    # 基础镜像: 默认取 Dockerfile 的 FROM, 可用 BASE_IMAGE 覆盖(镜像站)
+    # 基础镜像: 取 Dockerfile 里的默认值, 可用 BASE_IMAGE 覆盖(镜像站)
+    #
+    # 不能直接取 `FROM` 行的镜像名 —— Dockerfile 里写的是
+    #       ARG BASE=debian:bookworm-slim
+    #       FROM ${BASE}
+    # `FROM` 的最后一个字段是字面量 "${BASE}" (一个 build-arg 引用), 拿去 pull
+    # 会去拉一个叫 "${BASE}" 的镜像, 必然失败, 而且报错信息看起来像网络问题。
+    # 所以优先取 `ARG BASE=` 的默认值, 那才是真正的镜像名。
     # -----------------------------------------------------------------------
     if [ -z "$BASE_IMAGE" ]; then
-        BASE_IMAGE="$(grep -iE '^FROM' "$DOCKERFILE_DIR/Dockerfile" | head -1 | awk '{print $NF}')"
+        BASE_IMAGE="$(dockerfile_base_default)"
     fi
+    if [ -z "$BASE_IMAGE" ]; then
+        c_err "✗ 无法从 Dockerfile 解析基础镜像名, 请用 BASE_IMAGE=... 显式指定"
+        exit 1
+    fi
+
     BUILD_ARGS=()
-    if [ -n "$BASE_IMAGE" ]; then
-        BUILD_ARGS+=(--build-arg "BASE=$BASE_IMAGE")
-    fi
+    BUILD_ARGS+=(--build-arg "BASE=$BASE_IMAGE")
 
     # -----------------------------------------------------------------------
     # 基础镜像可达性预检

@@ -7,12 +7,17 @@
 #
 # 需要 Docker Desktop 正在运行。
 # 产物在 build-armhf\, 其中 TOOLCHAIN.txt 记录工具链指纹(见文件末尾说明)。
+#
+# 访问不了 docker.io 时用镜像站覆盖基础镜像:
+#   .\armhf-toolchain\build-armhf.ps1 -BaseImage docker.m.daocloud.io/library/debian:bookworm-slim
 
 [CmdletBinding()]
 param(
     [switch]$Rebuild,
     [switch]$Shell,
-    [string]$Image = "firecontrol-armhf:bookworm"
+    [string]$Image = "firecontrol-armhf:bookworm",
+    # 环境镜像的基础镜像。留空 = 用 Dockerfile 里 `ARG BASE=` 的默认值。
+    [string]$BaseImage = ""
 )
 
 # PowerShell 5.1 的坑: 原生命令(docker / cmake)往 stderr 写任何东西 —— 构建进度、
@@ -52,7 +57,29 @@ if ($Rebuild -or (-not $imageExists)) {
     if ($Rebuild) { Info "=== 重建镜像 $Image ===" }
     else          { Info "=== 镜像 $Image 不存在, 开始构建 ===" }
     Info "    (首次较慢; 之后除非 -Rebuild 否则复用)"
-    & docker build -t $Image $Here
+
+    # 基础镜像名不能从 `FROM` 行取 —— Dockerfile 里写的是
+    #     ARG BASE=debian:bookworm-slim
+    #     FROM ${BASE}
+    # `FROM` 的第二个字段是字面量 "${BASE}", 拿去 pull 会去拉一个叫 "${BASE}"
+    # 的镜像, 必然失败。真正的名字在 `ARG BASE=` 的默认值里。
+    if ([string]::IsNullOrWhiteSpace($BaseImage)) {
+        $df = Get-Content (Join-Path $Here "Dockerfile")
+        foreach ($line in $df) {
+            if ($line -match '^\s*ARG\s+BASE\s*=\s*(.+?)\s*$') {
+                $BaseImage = $Matches[1].Trim('"').Trim("'")
+                break
+            }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($BaseImage)) {
+        Fail "✗ 无法从 Dockerfile 解析基础镜像名, 请用 -BaseImage ... 显式指定"
+        exit 1
+    }
+
+    Info "    基础镜像: $BaseImage"
+    & docker build --build-arg "BASE=$BaseImage" -t $Image $Here
     if ($LASTEXITCODE -ne 0) { Fail "镜像构建失败"; exit 1 }
 }
 
@@ -78,7 +105,6 @@ Info "    方式: COPY 源码进镜像层 (不依赖 bind mount)"
     -f "$Here/Dockerfile.build-armhf" `
     -t $BuildImage `
     $ProjectRoot
-
 if ($LASTEXITCODE -ne 0) { Fail "容器内构建失败"; exit 1 }
 
 # --- 取回产物 ---

@@ -203,7 +203,7 @@ do_gui_armhf() {
     fi
 
     echo
-    echo "    上板前校验:  ./armhf-toolchain/verify-on-board.sh root@<板子IP>"
+    echo "    上板前校验:  ./armhf-toolchain/verify-on-board.sh fbi@<板子IP>"
 }
 
 case "${1:-native}" in

@@ -12,7 +12,9 @@ CTestTestfile.cmake
 compile_commands.json
 
 # 可执行文件 (根目录下的旧式产物, 正常应该在 build/ 里)
+# 两个目标都要列 —— 只列控制台那个的话, 就地构建出的 GUI 二进制会被误提交
 /deffire-dev
+/deffire-gui-dev
 *.armhf
 
 # 编辑器

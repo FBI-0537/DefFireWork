@@ -86,7 +86,7 @@ host_arch    = x86_64
 ### 3. 上板前用 `verify-on-board.sh` 校验
 
 ```bash
-./armhf-toolchain/verify-on-board.sh root@<板子IP>
+./armhf-toolchain/verify-on-board.sh fbi@<板子IP>
 ```
 
 它会检查：

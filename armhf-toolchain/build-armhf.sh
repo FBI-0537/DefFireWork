@@ -233,6 +233,10 @@ CID="$("$RUNTIME" create "$BUILD_IMAGE")"
 for f in deffire-gui-dev deffire-dev; do
     if "$RUNTIME" cp "$CID:/work/build-armhf/$f" "$BUILD_DIR/$f" 2>/dev/null; then
         printf '  ✓ %s\n' "$f"
+    else
+        # 不能只是"不打印" —— 取不到要说出来, 否则容器里编失败会和"没编这个目标"
+        # 混在一起, 只在最后报一句"没有可执行文件"。
+        printf '  ✗ %s —— 容器里没有这个产物\n' "$f"
     fi
 done
 "$RUNTIME" rm "$CID" >/dev/null 2>&1 || true
@@ -262,26 +266,61 @@ sed 's/^/    /' "$BUILD_DIR/TOOLCHAIN.txt"
 # ---------------------------------------------------------------------------
 echo
 c_info "=== 产物 ==="
-FOUND=0
+# 逐个检查而不是"至少有一个就算过": 两个目标由同一次 cmake 产出, 少任何一个都
+# 说明构建不完整。原来只判断"一个都没有", GUI 缺失而控制台在时会被漏掉。
+MISSING=()
 for exe in deffire-gui-dev deffire-dev; do
     f="$BUILD_DIR/$exe"
     if [ -f "$f" ]; then
         printf '  %-20s %9s 字节  %s\n' "$exe" "$(stat -c %s "$f")" \
             "$(LC_ALL=C file -b "$f" | cut -d, -f1-3)"
-        FOUND=1
+    else
+        printf '  %-20s 缺失\n' "$exe"
+        MISSING+=("$exe")
     fi
 done
 
-if [ "$FOUND" -eq 0 ]; then
-    c_err "✗ build-armhf/ 里没有可执行文件, 检查上面的构建输出"
+if [ "${#MISSING[@]}" -gt 0 ]; then
+    echo
+    c_err "✗ 以下产物没取到: ${MISSING[*]}"
+    c_err "  往上翻容器内的构建输出看是哪一步失败"
     exit 1
 fi
 
-if [ -x "$HOME/.local/bin/arm-linux-gnueabihf-readelf" ]; then
+# ---------------------------------------------------------------------------
+# 动态依赖 (仅作展示)
+#
+# 用**本机的 readelf** 就够 —— 读 ELF 头和动态段不依赖 BFD 的后端架构支持,
+# 只有 strip 才需要 ARM 后端 (见 CMakeLists 里关于链接期 -s 的说明)。
+#
+# 早先这里只认 Zig 包装脚本 ~/.local/bin/arm-linux-gnueabihf-readelf。没有它的
+# 机器上 (新克隆 / Windows+WSL / CI) 整段会被**静默跳过**, 看起来就像"产物没有
+# 动态依赖" —— 正是 WARNING.md D-2 记录的那类误报。改成按顺序找, 都没有就明说。
+# ---------------------------------------------------------------------------
+READELF=""
+for c in readelf "$HOME/.local/bin/arm-linux-gnueabihf-readelf" \
+         "$HOME/.local/bin/arm-linux-musleabihf-readelf"; do
+    case "$c" in
+        /*)
+            if [ -x "$c" ]; then READELF="$c"; break; fi
+            ;;
+        *)
+            if command -v "$c" >/dev/null 2>&1; then READELF="$c"; break; fi
+            ;;
+    esac
+done
+
+if [ -n "$READELF" ]; then
+    for exe in deffire-gui-dev deffire-dev; do
+        [ -f "$BUILD_DIR/$exe" ] || continue
+        echo
+        echo "  $exe 的动态依赖:"
+        LC_ALL=C "$READELF" -d "$BUILD_DIR/$exe" 2>/dev/null \
+            | grep NEEDED | sed 's/^/    /' || true
+    done
+else
     echo
-    echo "  动态依赖:"
-    LC_ALL=C "$HOME/.local/bin/arm-linux-gnueabihf-readelf" -d "$BUILD_DIR/deffire-gui-dev" 2>/dev/null \
-        | grep NEEDED | sed 's/^/    /' || true
+    c_err "  ✗ 找不到 readelf, 跳过了动态依赖检查 (装 binutils 即可看到)"
 fi
 
 echo

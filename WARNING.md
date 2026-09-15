@@ -21,7 +21,7 @@
 | 2 | **开发机上跑 GUI 中文会显示成方框** | 字体候选表里 6 条路径都是 Debian 布局，Fedora 上一条都不存在。临时绕开：`./build/deffire-gui-dev --font=/usr/share/fonts/google-noto-sans-cjk-vf-fonts/NotoSansCJK-VF.ttc`。**板上不受影响**（`wqy-zenhei.ttc` 在候选表第一条） |
 | 3 | **界面中央那行大字仍是 `halloworld`** | 二进制已改名为 `deffire-gui-dev` / `deffire-dev`，但屏幕正中显示的文字是 `src/gui.cpp` 里的 `kText`，**有意保留未改**。要改只动那一个常量 |
 | 4 | **CMake 不自动扫描源文件** | 新增 `.cpp` 必须手动加到 `CMakeLists.txt`（`add_library` / `add_executable`），否则不会被编译 |
-| 5 | **`build.sh run` 不开窗口** | 它跑的是控制台程序 `deffire-dev`。要看窗口用 `build.sh gui` |
+| 5 | **`build.sh` 没有"运行"模式** | 删 Zig 路径时 `run` / `gui` 一并删了。跑控制台直接调二进制 `./build/deffire-dev`；开发机看窗口用 `./build/deffire-gui-dev --windowed` |
 | 6 | **armhf 的 GUI 不能在开发机运行** | 架构不同 + 需要板子的 libX11。必须 scp 到板子 |
 | 7 | **容器内首次全量编译较慢** | LVGL 有 311 个 `.c`。容器方案是 COPY 进镜像层，**没有增量编译**，每次全量 |
 | 8 | **repo 目录的 SELinux 标签可能被改过** | 如果曾用 `:Z` 跑过容器，标签会变成 `container_file_t` 且 `restorecon` 会拒绝恢复。修法见 [D-3](#d-3-z-会永久改写宿主目录的-selinux-标签) |

@@ -210,5 +210,7 @@ mkdir: cannot create directory '/work/build-armhf/CMakeFiles': Permission denied
   **已经用 CRLF 检出的工作区需要重新检出**才会变成 LF：
   `git rm --cached -r . && git reset --hard`（或直接重新 clone）。
 - 旧的 `cmake/toolchain-armhf.cmake`（Zig 版，编译**纯逻辑层与控制台程序**）
-  **仍然保留** —— 它不需要 X11，用 Zig 编很快，作为轻量路径继续可用。
-  只有 **GUI** 必须走本目录的 Docker 环境。
+  **已废弃**：`build.sh` 里的 Zig 路径（`armhf` / `verify` 模式）已删除，
+  现在没有任何脚本引用这个工具链文件。它留在仓库里只作历史参考
+  （相关的坑记录在 [../WARNING.md](../WARNING.md) 的 B 节）。
+  交叉编译**一律**走本目录的 Docker 环境。

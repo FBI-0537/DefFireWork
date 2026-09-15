@@ -178,7 +178,7 @@ gui.cpp  ──> 自己的 main()，自己初始化 LVGL、自己跑循环、深
 | 5 | 传感器模块 | 0%。IIO / GPIO 读数还没碰 |
 | 6 | `clear_heartbeat` 未接按钮 | `led_onboard_clear_heartbeat()` / `buzzer_...` 零调用。|
 | 7 | 底栏两行宽度不等 | 第二行 3 个按钮约 328px，第一行 4 个约 243px（外观问题） |
-| 8 | **清理已删构建模式的文档引用** | 有人把 `build.sh` 里的 Zig 旧路径删了（`run`/`gui`/`armhf`/`verify` 四个模式），但下列位置仍引用它们：`README.md:136,182,183,185,189,192`、`WARNING.md:24`、`.vscode/tasks.json:93`（那个任务直接调 `cmake/toolchain-armhf.cmake`，现已无人使用）。见 §11 |
+| 8 | ~~清理已删构建模式的文档引用~~ | ✅ **已完成**（见 §11）。Zig 路径删除后遗留的文档/配置不一致已全部清理，顺带修掉 `build.sh` 的参数转发 bug |
 
 ---
 
@@ -279,25 +279,62 @@ cd ~/Desktop && DISPLAY=:0 ./deffire-gui-dev
 
 ## 11. ⚠️ 交接时的未提交改动（务必先看清楚再提交）
 
-写本文档时，工作区里有一批**不是本文档作者所做**的改动，**尚未提交**：
+本文档写作期间，工作区里混了**两拨改动，均未提交**：
 
-| 文件 | 改动 | 状态 |
+| 文件 | 改动 | 谁改的 |
 |---|---|---|
-| `build.sh` | 删除 Zig 旧路径：去掉 `run` / `gui` / `armhf` / `verify` 四个模式，删掉 `TOOLCHAIN`、`need_armhf()`、`do_armhf()`、`verify_armhf()`、`export LC_ALL=C`；`do_gui` → `do_gui_full` | **有意重构，但未传播到文档** |
-| `src/start.cpp` | 仅行尾空格 + 一处注释空格（无功能变化） | 无害 |
-| `workflow.md` | **空文件**（0 行），创建了但未填写 | 待填 |
+| `build.sh` | ①删除 Zig 旧路径（去 `run`/`gui`/`armhf`/`verify` 四个模式，删 `TOOLCHAIN`、`need_armhf()`、`do_armhf()`、`verify_armhf()`、`export LC_ALL=C`，`do_gui`→`do_gui_full`）<br>②**修参数转发 bug**（见下） | ① 项目维护者<br>② 本文档作者 |
+| `src/start.cpp` | 仅行尾空格 + 一处注释空格 | 项目维护者 |
+| `workflow.md` | **空文件**（0 行），创建了未填写 | 项目维护者 |
+| `README.md` | 加 HANDOFF 链接；清理已删模式的引用；Zig 段改为「已废弃」 | 本文档作者 |
+| `WARNING.md` | 字号笔误（34 → 40/18/16）；A-5 改为「`build.sh` 没有运行模式」 | 本文档作者 |
+| `HANDOFF.md` | 新建 | 本文档作者 |
 
-**该重构遗留的不一致**（尚未清理）：
+### 顺手修掉的 `build.sh` bug：参数转发静默失效
 
-- `README.md:136,182,183,185,189,192` —— 仍写着 `./build.sh armhf` / `run` / `gui` / `verify`
-- `WARNING.md:24` —— 「`build.sh run` 不开窗口」这一条引用的模式已删
-- `.vscode/tasks.json:93` —— 任务直接调 `cmake -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armhf.cmake`，
-  而该工具链文件（Zig 版）已无任何脚本使用
-- `cmake/toolchain-armhf.cmake` —— 文件还在，但已成孤儿（仅被上面那个 VS Code 任务引用）
+`do_gui_armhf()` 里有 `"$script" "$@"`，看起来是把参数转给
+`armhf-toolchain/build-armhf.sh`，但 case 分支调用时没传参：
+
+```sh
+gui-armhf) do_gui_armhf ;;          # 函数内 $@ 为空 → "$@" 展开成零个词
+```
+
+后果：`./build.sh gui-armhf --rebuild` 里的 `--rebuild` 被**静默丢弃**，
+命令照常跑完、退出码 0，看起来像"重建过了"其实没有。
+
+**已修**：改为 `gui-armhf) do_gui_armhf "${@:2}" ;;`，现在 `--rebuild` / `--shell`
+都能真正转发。实测 `./build.sh gui-armhf --bogus` 会被底层脚本以「未知参数: --bogus」
+拒绝并返回 1（修复前是静默通过）。
+
+顺带补上了 `build.sh` 缺失的文件末尾换行。
+
+### 该重构遗留的不一致：**已清理**
+
+| 位置 | 处理 |
+|---|---|
+| `README.md` 的模式清单 | 改为实际的 5 个模式；补 `--rebuild`/`--shell` 用法 |
+| `README.md` 的 Zig 章节 | 改为「旧路径：Zig（已废弃）」 |
+| `README.md` 目录树 / 产物说明 | 标注 `toolchain-armhf.cmake` 已废弃；产物只来自容器 |
+| `WARNING.md:24` | 改为「`build.sh` 没有运行模式」 |
+| `.vscode/tasks.json` | **删除**「CMake: 构建 armhf」任务（直接用已废弃的 Zig 工具链，且与「构建 GUI armhf」重复）；任务数 10 → 9 |
+| `CMakeLists.txt` | 两处注释改为标注该工具链已废弃；FATAL_ERROR 提示不再建议用它 |
+| `armhf-toolchain/README.md` | 不再说它「仍然可用」，改为已废弃 |
+
+**保留未删**：`cmake/toolchain-armhf.cmake` 文件本身，以及 `WARNING.md` 的 B 节
+（B-1…B-15 全是 Zig 时代的坑）。它们不再被任何脚本引用，但**那 15 条是换来的经验**，
+删了可惜；要删请单独决定。
 
 **删除 `export LC_ALL=C` 是安全的**：`build.sh` 现在不再解析 `readelf` 输出
 （那段已移入 `armhf-toolchain/build-armhf.sh`，它自己内部设了 `LC_ALL=C`）。
 
-**提交前先和改动者确认**，不要用 `git add -A` 把别人的在途改动一起提交。
-本文档作者只改了 `README.md`（加 HANDOFF 链接）、`WARNING.md`（字号笔误）、`HANDOFF.md`（新建）。
+### 提交建议
+
+**不要 `git add -A` 一把梭** —— 那会把「项目维护者的在途重构」和「本文档作者的
+文档整理」混进同一个提交。建议至少分成：
+
+1. 构建脚本重构（`build.sh` 的 Zig 路径删除）+ 文档/配置跟随清理
+2. `HANDOFF.md` 新增（+ README 的链接）
+
+`src/start.cpp` 的空白改动和空的 `workflow.md` 请自行决定收不收。
+
 

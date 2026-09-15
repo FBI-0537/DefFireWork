@@ -127,15 +127,16 @@ BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
 **产物隔离**：每次构建写入 `build-armhf/TOOLCHAIN.txt`（工具链指纹），随产物拷到板上，
 出问题时先看它确认「这个二进制是谁编的」。
 
-### 另一条路径：Zig（只编纯逻辑层）
+### 旧路径：Zig（已废弃）
 
-`cmake/toolchain-armhf.cmake` + `~/.local/bin/arm-linux-*`（Zig 0.16 包装脚本）
-可以交叉编译**纯逻辑层与控制台程序**，速度快，但**没有 X11/freetype，编不了 GUI**。
+`cmake/toolchain-armhf.cmake` + `~/.local/bin/arm-linux-*`（Zig 0.16 包装脚本）曾用于
+交叉编译**纯逻辑层与控制台程序**（没有 X11/freetype，编不了 GUI）。
 
-```bash
-./build.sh armhf        # 产出 build-armhf/ 里的逻辑层与 deffire-dev
-armhf-env               # 检查这套环境是否就绪
-```
+统一到 `armhf-toolchain/` 的 Docker 环境后，`build.sh` 已删除对应的
+`armhf` / `verify` 模式，这条路径不再有入口。工具链文件本身还留在仓库里，
+但已经没有脚本引用它。
+
+踩过的坑记录在 [WARNING.md](WARNING.md) 的 B 节 —— 那不是废纸，是换来的经验。
 
 ---
 
@@ -311,7 +312,6 @@ sudo reboot
 
 **注意**：**不支持"双击窗口退出"** —— 那是早期行为，已移除。原因见
 [WARNING.md C-6](WARNING.md#c-6-窗口映射瞬间可能收到杂散-buttonpress)：
-双击曾导致窗口"启动即关闭"的竞态，而且在触摸屏上容易误触。
 
 按钮在 1024×600 上的实际尺寸（按窗口比例算，换屏幕不用改代码）：
 
@@ -358,7 +358,7 @@ FireControlApp/
 ├── build.sh                        便捷构建封装
 ├── .gitattributes / .dockerignore / .gitignore
 ├── cmake/
-│   └── toolchain-armhf.cmake       Zig 工具链（纯逻辑层，无 X11）
+│   └── toolchain-armhf.cmake       Zig 工具链（**已废弃**，无脚本引用）
 ├── armhf-toolchain/                ★ 交叉编译 GUI 的唯一入口
 ├── src/
 │   ├── greeting.h / greeting.cpp   纯逻辑层 → libfirecontrol.a
@@ -373,7 +373,7 @@ FireControlApp/
 
 ```
 build/               原生 x86-64
-build-armhf/         armhf 产物（Zig 或容器），含 TOOLCHAIN.txt 指纹
+build-armhf/         armhf 产物（容器编译），含 TOOLCHAIN.txt 指纹
 build-debug/         Debug 构建
 ```
 

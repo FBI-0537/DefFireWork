@@ -77,8 +77,8 @@ endif()
 # ---------------------------------------------------------------------------
 # GUI 可执行文件 —— LVGL 图形界面 (deffire-gui-dev)
 #
-# 维护分工: 这一节的 LVGL 集成由 FBI-0537 负责; 上面的纯逻辑层、控制台程序与
-#           cmake/toolchain-armhf.cmake 来自 Skywindfox, 改动时保留其注释与编译方式。
+# 维护分工: 这一节的 LVGL 集成由 FBI-0537 负责; 上面的纯逻辑层与控制台程序
+#           来自 Skywindfox, 改动时保留其注释与编译方式。
 #
 # 界面用 LVGL v9.2, 源码就在 third_party/lvgl (随仓库一起走, 不依赖网络)。
 #
@@ -99,8 +99,9 @@ endif()
 #       不要手工拼 cmake 命令 —— 那两个脚本会带上正确的 toolchain 文件与
 #       pkg-config 环境, 并给产物写工具链指纹。详见 armhf-toolchain/README.md
 #
-#       注: cmake/toolchain-armhf.cmake (Zig 版) 只用于**纯逻辑层与控制台程序**,
-#       它没有 X11/freetype, 用它开 WITH_GUI=ON 会在下面直接报错。
+#       注: 仓库里的 cmake/toolchain-armhf.cmake (Zig 版) 已**废弃** —— 它没有
+#       X11/freetype, 且 build.sh 里的 Zig 路径已删除, 现在没有任何脚本引用它。
+#       留着只为查阅历史, 不要用它开 WITH_GUI=ON (会在下面直接报错)。
 #
 # 命名说明: 两个目标名字都不能重复 —— 控制台是 deffire-dev, GUI 是 deffire-gui-dev。
 #         后缀 -dev 表示当前是开发阶段的构建, 正式版去掉即可。
@@ -208,8 +209,8 @@ else()
                 "不要手工拼 cmake 命令: pkg-config 必须只查 armhf 的 .pc 文件\n"
                 "(见 armhf-toolchain/toolchain-docker-armhf.cmake), 漏了会链到 x86-64。\n"
                 "\n"
-                "另: 若你用的是 cmake/toolchain-armhf.cmake(Zig 版), 那是给纯逻辑层\n"
-                "与控制台程序用的, 它没有 X11/freetype —— 交叉编译 GUI 请改用上面的脚本。")
+                "注: 仓库里那个 cmake/toolchain-armhf.cmake (Zig 版) 已废弃, 它没有\n"
+                "X11/freetype, 不要拿它编 GUI。")
         else()
             message(WARNING
                 "找不到 x11 / freetype2 开发文件, 跳过 GUI 目标。\n"

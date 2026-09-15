@@ -84,6 +84,11 @@ RUN set -eux; \
 #    LVGL 的显示/输入后端用 X11，中文字形用 FreeType，所以这两样必须在。
 #    只装 :armhf —— 不需要宿主(amd64)版本。
 #
+#    libgpiod-dev:armhf 只有 gpio_read_value() 用（读 GPIO 开关量输入，
+#    给传感器模块用；板载 LED/蜂鸣器走 sysfs，不需要它）。装在这里是为了让
+#    交叉编译产物能链上 armhf 版 libgpiod —— 板子上还要有运行时库 libgpiod2。
+#    它同样只装 :armhf。
+#
 #    注意 pkg-config 的 .pc 文件由 :armhf 包装到 /usr/lib/arm-linux-gnueabihf/
 #    pkgconfig/，那个目录不在默认 PKG_CONFIG_PATH 里，所以要显式加上；
 #    PKG_CONFIG_LIBDIR 屏蔽宿主 .pc，避免把 x86-64 的路径带进来。
@@ -93,7 +98,8 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         libx11-dev:armhf \
-        libfreetype-dev:armhf; \
+        libfreetype-dev:armhf \
+        libgpiod-dev:armhf; \
     rm -rf /var/lib/apt/lists/*
 
 ENV PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig

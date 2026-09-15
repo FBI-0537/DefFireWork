@@ -2,6 +2,13 @@
 
 #include <cstdio>
 
+// libgpiod 是可选的 (CMake 的 WITH_GPIOD, 默认 AUTO): 开发机上没装
+// libgpiod-devel 时整个项目仍然要能编。所以头文件和实现都跟着这个宏走 ——
+// 宏由 firecontrol 目标 PUBLIC 导出, 声明与实现不会各编一边。
+#if defined(FC_HAVE_GPIOD)
+#include <gpiod.h>
+#endif
+
 namespace useable_tools
 {
 
@@ -53,5 +60,68 @@ int write_File(const char *path, const char *data)
 
     return (written && closed) ? 0 : -1;
 }
+
+#if defined(FC_HAVE_GPIOD)
+
+int gpio_read_value(const char *chip_label, unsigned int line_offset, const char *consumer) {
+    struct gpiod_chip *chip = nullptr;
+    struct gpiod_line *line = nullptr;
+    int value = -1;
+
+    if (chip_label == nullptr || consumer == nullptr) {
+        return -1;
+    }
+
+    chip = gpiod_chip_open_by_label(chip_label);
+    if (!chip) {
+        perror("gpiod_chip_open_by_label");
+        return -1;
+    }
+
+    line = gpiod_chip_get_line(chip, line_offset);
+    if (!line) {
+        perror("gpiod_chip_get_line");
+        gpiod_chip_close(chip);
+        return -1;
+    }
+
+    if (gpiod_line_request_input(line, consumer) < 0) {
+        perror("gpiod_line_request_input");
+        gpiod_chip_close(chip);   // 未成功 request，不要 release
+        return -1;
+    }
+
+    value = gpiod_line_get_value(line);
+    if (value < 0) {
+        perror("gpiod_line_get_value");
+    }
+
+    gpiod_line_release(line);
+    gpiod_chip_close(chip);
+
+    return value;
+}
+
+#else  // 没编入 libgpiod: 保留同名函数, 但显式失败 —— 不静默返回"低电平"
+
+int gpio_read_value(const char *chip_label, unsigned int line_offset, const char *consumer) {
+    (void)chip_label;
+    (void)line_offset;
+    (void)consumer;
+
+    // 只提示一次: 传感器是轮询读的, 每次都打印会把 stderr 刷爆
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        std::fprintf(stderr,
+                     "gpio_read_value: 本产物没有编入 libgpiod 支持 (CMake 的 WITH_GPIOD) "
+                     "—— 返回 -1。装上 libgpiod-devel 后重新配置即可。\n");
+    }
+    return -1;
+}
+
+#endif
+
+
 
 } // namespace useable_tools

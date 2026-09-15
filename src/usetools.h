@@ -29,6 +29,27 @@ namespace useable_tools
     //
     // 注意: data 是**数据**不是格式串 —— 里面的 % 会原样写进文件。
     int write_File(const char *path, const char *data);
+
+    // 读一条 GPIO 输入线的电平。给接在 GPIO 上的开关量输入用(火焰/人体/光电)——
+    // 板载 LED 与蜂鸣器走 sysfs, 不需要这个。
+    //
+    // 返回值: 0 或 1; 失败返回 -1 (与 read_File / write_File 的"负值即失败"一致)。
+    //
+    // 参数:
+    //     chip_label  —— **GPIO 控制器**的 label, 例如 "gpiochip0" / "GPIOA"。
+    //                    不是 "sys-led" / "beep" 这种设备名: 那些是内核 LED 框架
+    //                    注册的设备, 引脚已经归驱动持有, 这里再 request 会失败
+    //                    (EBUSY)。label 用 `gpiodetect` 查。
+    //     line_offset —— 该控制器内的线号, 即 `gpioinfo` 里的 line 编号。
+    //     consumer    —— 传给内核的消费者名字; 排查时 `gpioinfo` 的 "used by"
+    //                    会显示它, 建议填程序名。
+    //
+    // 支持性: 需要 libgpiod (由 CMake 的 WITH_GPIOD 控制, 默认 AUTO)。
+    //     没编进去时这个函数**仍然存在**, 但会打印一行提示并返回 -1 ——
+    //     不静默、也不需要调用方到处写 #ifdef。
+    //     用的是 libgpiod **v1** API (Debian 12 带的是 1.6); v2 已删除这些符号。
+    int gpio_read_value(const char *chip_label, unsigned int line_offset,
+                        const char *consumer);
 }
 
 #endif // FIRECONTROL_USETOOLS_H

@@ -221,6 +221,61 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# GPIO 输入读取 (libgpiod) —— 可选
+#
+# 板载 LED / 蜂鸣器走 sysfs (/sys/class/leds/*)，**不需要** libgpiod。
+# 需要它的是接在 GPIO 上的开关量输入（火焰/人体/光电这类传感器），
+# 由 useable_tools::gpio_read_value() 读取。
+#
+# 默认 AUTO: 有 libgpiod 就编进去，没有就**明确说一声**并跳过 ——
+#   既不静默（那样"功能没编进去"会被当成"代码没写"），
+#   也不因此让整个构建失败（开发机上没装 libgpiod-devel 时 GUI 仍然要能编）。
+# 要强制要求就 -DWITH_GPIOD=ON，找不到直接 FATAL_ERROR。
+#
+# 依赖从哪来:
+#   armhf 容器   : armhf-toolchain/Dockerfile 里装了 libgpiod-dev:armhf
+#   Fedora 原生  : sudo dnf install libgpiod-devel
+#   Debian/Ubuntu: sudo apt install libgpiod-dev
+# 板上跑的时候还需要运行时库: sudo apt install libgpiod2
+# ---------------------------------------------------------------------------
+set(WITH_GPIOD "AUTO" CACHE STRING "是否编译 GPIO 读取 (ON / OFF / AUTO)")
+set_property(CACHE WITH_GPIOD PROPERTY STRINGS ON OFF AUTO)
+
+if(NOT WITH_GPIOD STREQUAL "OFF")
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(GPIOD_DEPS QUIET libgpiod)
+    endif()
+
+    if(GPIOD_DEPS_FOUND)
+        # 宏必须是 PUBLIC: usetools.h 的声明与 usetools.cpp 的实现要看到同一个值,
+        # 否则会出现"声明了但没实现"(或反过来)的链接期错误。
+        target_compile_definitions(firecontrol PUBLIC FC_HAVE_GPIOD=1)
+        target_include_directories(firecontrol PUBLIC ${GPIOD_DEPS_INCLUDE_DIRS})
+        target_link_directories(firecontrol PUBLIC ${GPIOD_DEPS_LIBRARY_DIRS})
+        target_link_libraries(firecontrol PUBLIC ${GPIOD_DEPS_LIBRARIES})
+
+        message(STATUS "GPIO: libgpiod ${GPIOD_DEPS_VERSION} —— gpio_read_value() 已编入")
+        message(STATUS "     libs: ${GPIOD_DEPS_LIBRARIES}")
+    elseif(WITH_GPIOD STREQUAL "ON")
+        message(FATAL_ERROR
+            "WITH_GPIOD=ON 但 pkg-config 找不到 libgpiod。\n"
+            "\n"
+            "    Fedora:        sudo dnf install libgpiod-devel\n"
+            "    Debian/Ubuntu: sudo apt install libgpiod-dev\n"
+            "\n"
+            "交叉编译走 armhf-toolchain 的容器即可 —— 镜像里已装 libgpiod-dev:armhf,\n"
+            "但**镜像需要重建**才会带上它:\n"
+            "\n"
+            "    ./armhf-toolchain/build-armhf.sh --rebuild")
+    else()
+        message(STATUS
+            "GPIO: 未找到 libgpiod, gpio_read_value() 不编入产物 (会返回 -1 并打印提示)。\n"
+            "      传感器模块要用它, 原生开发机上装 libgpiod-devel 即可; 详见 workflow.md")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # 单元测试
 # ---------------------------------------------------------------------------
 include(CTest)

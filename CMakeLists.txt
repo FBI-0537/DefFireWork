@@ -255,6 +255,11 @@ build_type = ${CMAKE_BUILD_TYPE}")
 
 if(EXISTS "${_fp_file}")
     file(READ "${_fp_file}" _fp_old)
+    # 比较前把首尾空白去掉: 写入时带了一个结尾换行 (见下面 file(WRITE ...)),
+    # 而比较用的 _fp_new 没有 —— 直接 STREQUAL 永远不相等, 于是**每次
+    # reconfigure 都报"指纹不一致"**。结果是"真的混了工具链"和"什么都没变"
+    # 长得一模一样, 告警等于失效 (和 WARNING.md A 节那类误报同源)。
+    string(STRIP "${_fp_old}" _fp_old)
     if(NOT _fp_old STREQUAL "${_fp_new}")
         message(WARNING
             "构建目录里的工具链指纹与当前配置不一致:\n"

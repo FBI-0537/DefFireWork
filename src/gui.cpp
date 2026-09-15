@@ -784,10 +784,13 @@ int main(int argc, char **argv)
     // -----------------------------------------------------------------------
     lv_init();
 
-    // FreeType 要在 lv_init 之后初始化: 它把上下文挂在 LVGL 的全局对象上。
-    if (lv_freetype_init(256) != LV_RESULT_OK) {
-        std::fprintf(stderr, "警告: FreeType 初始化失败, 中文可能显示为方框\n");
-    }
+    // FreeType 已经由 lv_init() 初始化过了 (third_party/lvgl/src/lv_init.c:
+    // lv_freetype_init(LV_FREETYPE_CACHE_FT_GLYPH_CNT))。**不要再调一次** ——
+    // 第二次会因为 ft_ctx 已存在而返回 LV_RESULT_INVALID, 于是这里必然误报
+    // "FreeType 初始化失败, 中文可能显示为方框", 而中文其实是正常的。板上日志
+    // 里同样会出现那句, 会把上板验收引向错误方向。
+    // 缓存大小要调就改 lv_conf.h 的 LV_FREETYPE_CACHE_FT_GLYPH_CNT; 字形到底
+    // 能不能用, 由 createFont() 的失败分支负责报错。
 
     const char *font_file = pickFontFile(font_override);
     if (font_file != nullptr) {

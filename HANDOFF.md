@@ -277,20 +277,36 @@ cd ~/Desktop && DISPLAY=:0 ./deffire-gui-dev
 
 ---
 
-## 11. ⚠️ 交接时的未提交改动（务必先看清楚再提交）
+## 11. 本轮重构与整理（**已提交并推送**）
 
-本文档写作期间，工作区里混了**两拨改动，均未提交**：
+> 这一节记录交接前那次「删除 Zig 交叉编译路径」重构及其跟随整理。
+> **已经全部提交推送**，工作区是干净的 —— 不要去找未提交的改动。
 
-| 文件 | 改动 | 谁改的 |
-|---|---|---|
-| `build.sh` | ①删除 Zig 旧路径（去 `run`/`gui`/`armhf`/`verify` 四个模式，删 `TOOLCHAIN`、`need_armhf()`、`do_armhf()`、`verify_armhf()`、`export LC_ALL=C`，`do_gui`→`do_gui_full`）<br>②**修参数转发 bug**（见下） | ① 项目维护者<br>② 本文档作者 |
-| `src/start.cpp` | 仅行尾空格 + 一处注释空格 | 项目维护者 |
-| `workflow.md` | **空文件**（0 行），创建了未填写 | 项目维护者 |
-| `README.md` | 加 HANDOFF 链接；清理已删模式的引用；Zig 段改为「已废弃」 | 本文档作者 |
-| `WARNING.md` | 字号笔误（34 → 40/18/16）；A-5 改为「`build.sh` 没有运行模式」 | 本文档作者 |
-| `HANDOFF.md` | 新建 | 本文档作者 |
+交接时的提交序列（`main = origin/main = 93bf1d1`）：
 
-### 顺手修掉的 `build.sh` bug：参数转发静默失效
+```
+93bf1d1  build-armhf.sh: 取产物前先清旧文件, 否则逐个检查会被旧产物骗过
+1e51a76  Zig 路径删除后的文档与配置跟随清理
+9c470dc  删除 Zig 交叉编译路径; 新增交接文档 HANDOFF.md
+281eb89  Merge pull request #6 (FBI-0537: build-armhf.ps1 补逐个产物检查 + 清旧产物)
+```
+
+| 文件 | 改动 |
+|---|---|
+| `build.sh` | ①删除 Zig 旧路径（去 `run`/`gui`/`armhf`/`verify` 四个模式，删 `TOOLCHAIN`、`need_armhf()`、`do_armhf()`、`verify_armhf()`、`export LC_ALL=C`，`do_gui`→`do_gui_full`）<br>②**修参数转发 bug**（见下） |
+| `src/start.cpp` | 仅行尾空格 + 一处注释空格 |
+| `workflow.md` | 仍有 1 行内容「不需要这个。」（维护者留下的备注，未删） |
+| `README.md` | 加 HANDOFF 链接；模式清单改为实际 5 个；Zig 段改为「已废弃」；目录树/产物说明 |
+| `WARNING.md` | 字号笔误（34 → 40/18/16）；A-5 改为「`build.sh` 没有运行模式」；新增 B-19 |
+| `.vscode/tasks.json` | 删除用已废弃 Zig 工具链的孤儿任务（10 → 9 个） |
+| `CMakeLists.txt` | 2 处注释标注该工具链已废弃；FATAL_ERROR 不再建议用它 |
+| `armhf-toolchain/README.md` | 不再说 Zig 工具链「仍然可用」 |
+| `armhf-toolchain/build-armhf.sh` | 取产物前先清旧同名文件（见下） |
+| `HANDOFF.md` | 新建 |
+
+### 修掉的两个 bug（都是"静默给出错误结果"这一类）
+
+**1. `build.sh` 参数转发静默失效**
 
 `do_gui_armhf()` 里有 `"$script" "$@"`，看起来是把参数转给
 `armhf-toolchain/build-armhf.sh`，但 case 分支调用时没传参：
@@ -307,6 +323,21 @@ gui-armhf) do_gui_armhf ;;          # 函数内 $@ 为空 → "$@" 展开成零�
 拒绝并返回 1（修复前是静默通过）。
 
 顺带补上了 `build.sh` 缺失的文件末尾换行。
+
+**2. `build-armhf.sh` 取产物前不清旧文件 → 逐个检查被旧产物骗过**
+
+这个 bug 是**看了 FBI-0537 的 PR #6 才发现的** —— 他在 `build-armhf.ps1` 里加了
+「构建前清旧产物」，同样的道理适用于 `.sh`：
+
+```
+podman cp 失败时不会删除目标文件, 上一次的同名产物留在原地
+  → "逐个检查产物是否存在"看到的是旧文件 → 判定成功
+  → 容器里 GUI 编失败(只有控制台产出) 会被当成构建成功, 交付一个陈旧的界面
+```
+
+只把「至少有一个产物」改成「逐个检查」**并不足够**，因为旧文件仍然满足检查。
+**已修**：取产物之前先删掉旧的同名文件（删不掉就直接失败），并把产物清单收敛成
+`ARTIFACTS` 数组，清旧 / 取回 / 检查三处共用一份。见 `WARNING.md` B-19。
 
 ### 该重构遗留的不一致：**已清理**
 
@@ -327,14 +358,12 @@ gui-armhf) do_gui_armhf ;;          # 函数内 $@ 为空 → "$@" 展开成零�
 **删除 `export LC_ALL=C` 是安全的**：`build.sh` 现在不再解析 `readelf` 输出
 （那段已移入 `armhf-toolchain/build-armhf.sh`，它自己内部设了 `LC_ALL=C`）。
 
-### 提交建议
+### 事后看：那次提交混了三件事
 
-**不要 `git add -A` 一把梭** —— 那会把「项目维护者的在途重构」和「本文档作者的
-文档整理」混进同一个提交。建议至少分成：
+实际的提交 `9c470dc` 把「Zig 路径删除」+「`build.sh` bug 修复」+「新增交接文档」
+塞进了同一个提交（原提交信息只有一个字 `1`，后来 amend 成描述性信息）。
+内容没错，但拆成三个提交会更好回溯。
 
-1. 构建脚本重构（`build.sh` 的 Zig 路径删除）+ 文档/配置跟随清理
-2. `HANDOFF.md` 新增（+ README 的链接）
-
-`src/start.cpp` 的空白改动和空的 `workflow.md` 请自行决定收不收。
+教训：**别 `git add -A` 一把梭** —— 尤其在工作区可能混有别人在途改动的时候。
 
 

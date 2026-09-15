@@ -30,6 +30,13 @@
 //     ./deffire-gui-dev                 全屏 —— 板上用这个 (按屏幕实际尺寸铺满)
 //     ./deffire-gui-dev --windowed      1024x600 窗口 —— 开发机预览用
 //     ./deffire-gui-dev --font=<文件>   指定字体文件 (默认按候选表自动找)
+//
+// 界面结构 (分页):
+//     首页            : 只放"进入调试页"的入口, 保持干净 (6 个硬件按钮不在这里)
+//     LED 调试页      : LED 开 / LED 关 / LED 心跳 / 返回
+//     蜂鸣器调试页    : 蜂鸣器开 / 蜂鸣器关 / 蜂鸣器心跳 / 返回
+//   顶栏 (品牌 / 状态灯 / 退出) 三页完全一致; 切页**只重建底栏按钮** (见 g_page_dirty)。
+//   q / Esc 在每一页都是"退出程序", 不随页面变化 —— 板子上是触摸屏, 键盘只是开发机用。
 
 #include <lvgl.h>
 
@@ -154,13 +161,19 @@ lv_font_t *createFont(const char *file, uint32_t px, const char *what)
 // 会静默改掉功能, 而且编译器不会报错。加动作时在这里加一项, 然后在
 // onAction() 的 switch 里补一个 case (漏了会有 -Wswitch 警告, 因为没写 default)。
 enum class Action {
-    Nothing,             // 还没绑功能的占位按钮
+    // Nothing **必须留在第一位**: ButtonSpec 是聚合类型, 表里漏写 action 字段时,
+    // action 会被值初始化为 0 (= 第一个枚举值)。第一位是 Nothing, 漏写就退化成
+    // "占位", 顶多点了没反应; 若第一位是 LedOn, 漏写就会静默点亮 LED。
+    Nothing,
     LedOn,
     LedOff,
     LedHeartbeat,
     BuzzerOn,
     BuzzerOff,
     BuzzerHeartbeat,
+    LedSingleSettingPage,     // 首页 → LED 调试页
+    BuzzerSingleSettingPage,  // 首页 → 蜂鸣器调试页
+    BackToHome,               // 调试页 → 首页
 };
 
 struct ButtonSpec {
@@ -169,24 +182,84 @@ struct ButtonSpec {
     Action action;      // 点击后执行的动作; 只有 active=true 时才有意义
 };
 
-constexpr int kNumButtons = 8;  // 1 个退出 + 7 个底部按钮
+// 顶栏右侧的【退出】。它有自己的回调 (onClickQuit), action 不参与派发, 所以填
+// Nothing —— 但字段一样要写全 (见上面 Nothing 的说明)。
+constexpr ButtonSpec kQuitButton = {"退出", true, Action::Nothing};
 
-// [0] 是右上角退出, 其余是底部按钮 (2 行 × 4 个)。
-//
-// 排布顺序按"设备"分组: 上排 LED, 下排蜂鸣器。同一设备的开关/心跳挨在一起,
-// 误触时不容易点错 —— 消防设备上点错比点慢更糟。
-constexpr ButtonSpec kButtons[kNumButtons] = {
-    {"退出", true, Action::Nothing},
+// 底栏每行放几个按钮 (唯一的"每行几个"参数)。8 个按钮挤一行时每个只有 ~125 px,
+// 中文标签会被挤到换行/截断; 分页后每页最多 4 个, 每个约 243 px, 手指点着宽裕
+// (触摸目标建议 ≥ 48 px 见方, 高度由 btn_h 保证)。
+constexpr int kPerRow = 4;
 
+// 一个页面 = 一组底栏按钮 + 页名。加页面只改下面的表, 布局按数量自动算。
+struct PageSpec {
+    const char *name;  // 页名: 打印到控制台, 也显示在内容区
+    const ButtonSpec *buttons;
+    int count;
+};
+
+// 首页: 只留"进调试页"的入口 —— 6 个硬件按钮都挪进各自的调试页, 首页保持干净。
+constexpr ButtonSpec kHomeButtons[] = {
+    {"LED 调试", true, Action::LedSingleSettingPage},
+    {"蜂鸣器 调试", true, Action::BuzzerSingleSettingPage},
+    {"功能 8", false, Action::Nothing},
+};
+
+// LED 调试页: 单独操作 LED 的开关与心跳, 末位是返回
+constexpr ButtonSpec kLedButtons[] = {
     {"LED 开", true, Action::LedOn},
     {"LED 关", true, Action::LedOff},
     {"LED 心跳", true, Action::LedHeartbeat},
-    {"蜂鸣器开", true, Action::BuzzerOn},
+    {"返回", true, Action::BackToHome},
+};
 
+// 蜂鸣器调试页: 同上, 换成蜂鸣器
+constexpr ButtonSpec kBuzzerButtons[] = {
+    {"蜂鸣器开", true, Action::BuzzerOn},
     {"蜂鸣器关", true, Action::BuzzerOff},
     {"蜂鸣器心跳", true, Action::BuzzerHeartbeat},
-    {"功能 8", false, Action::Nothing},
+    {"返回", true, Action::BackToHome},
 };
+
+// 数组长度在编译期取出来 —— 原来 kNumButtons 是手写的数字, 往表里加一项忘了改
+// 就变成越界初始化 (这次就是这么坏的)。
+template <typename T, int N>
+constexpr int countOf(const T (&)[N])
+{
+    return N;
+}
+
+// 当前显示哪一页。顺序必须与 kPages 一致, 见下面的 static_assert。
+enum class Page { Home, Led, Buzzer };
+
+constexpr PageSpec kPages[] = {
+    {"首页", kHomeButtons, countOf(kHomeButtons)},
+    {"LED 调试页", kLedButtons, countOf(kLedButtons)},
+    {"蜂鸣器调试页", kBuzzerButtons, countOf(kBuzzerButtons)},
+};
+
+static_assert(static_cast<int>(Page::Home) == 0 && static_cast<int>(Page::Led) == 1 &&
+                  static_cast<int>(Page::Buzzer) == 2,
+              "Page 的顺序必须与 kPages 一致");
+
+// 某页要排几行; 以及所有页里最多的行数。
+// 底栏高度按"最多的那页"算, 切页时底栏高度不变, 内容区不会上下跳。
+constexpr int rowsOf(int count)
+{
+    return (count + kPerRow - 1) / kPerRow;
+}
+
+constexpr int maxRows()
+{
+    int m = 1;
+    for (const PageSpec &p : kPages) {
+        const int r = rowsOf(p.count);
+        if (r > m) {
+            m = r;
+        }
+    }
+    return m;
+}
 
 // ---------------------------------------------------------------------------
 // 全局状态
@@ -196,8 +269,39 @@ lv_font_t *g_font_big = nullptr;
 lv_font_t *g_font_small = nullptr;
 lv_font_t *g_font_status = nullptr;
 
+lv_obj_t *g_footer_bar = nullptr;  // 底栏容器: 只建一次, 切页时清空重建里面的按钮
+lv_obj_t *g_page_label = nullptr;  // 内容区那行状态说明 (页名 + 上一步结果)
+
+Page g_page = Page::Home;
+
+// 切页请求。事件回调里**只置这个标志**, 真正的重建放到主循环里做 ——
+// 否则会在"正在派发某个按钮的点击"的过程中删掉它所在的底栏。
+bool g_page_dirty = false;
+
+// 上一步动作的结果, 显示在内容区 (nullptr = 刚切过页, 只显示页名)
+const char *g_last_outcome = nullptr;
+
+// 布局尺寸在 buildUi() 里算好存下来 —— 切页重建底栏时还要用 (见 buildPageButtons)
+int g_win_w = kBoardWidth;
+int g_btn_h = 48;
+int g_margin = 10;
+
 uint32_t g_start_tick = 0;
 bool g_quit = false;
+
+// 内容区那行小字: "页名", 或 "页名 · 上一步结果"
+void refreshPageLabel()
+{
+    if (g_page_label == nullptr) {
+        return;
+    }
+    const PageSpec &page = kPages[static_cast<int>(g_page)];
+    if (g_last_outcome != nullptr) {
+        lv_label_set_text_fmt(g_page_label, "%s · %s", page.name, g_last_outcome);
+    } else {
+        lv_label_set_text(g_page_label, page.name);
+    }
+}
 
 bool inStartupGrace()
 {
@@ -237,35 +341,76 @@ void onAction(lv_event_t *e)
     if (indev != nullptr) {
         lv_indev_get_point(indev, &p);
     }
-    std::printf("点击【%s】坐标 (%d,%d) → ", spec->label, static_cast<int>(p.x),
-                static_cast<int>(p.y));
+    const int px = static_cast<int>(p.x);
+    const int py = static_cast<int>(p.y);
+
+    // 结果先算出来再统一打印 + 显示到内容区 —— 控制台的格式保持不变
+    // (板上核对触摸/硬件的记录都依赖 "点击【x】坐标 (x,y) → 结果" 这一行)。
+    //
+    // 初值给个兜底串而不是 nullptr: 下面 switch 覆盖了所有枚举值, 但枚举的底层
+    // 整数理论上可以是表外的值, GCC 因此无法证明它非空 (-Wformat-overflow)。
+    // 用兜底串既消掉警告, 也真的兜住了那种情况 —— 而不是靠加 default 把
+    // -Wswitch 那道"漏了 case"的防线拆掉。
+    const char *outcome = "(未知动作)";
+    bool page_switch = false;
 
     // 按动作派发。switch 里不写 default —— 以后往 Action 里加成员但忘了加
     // case 时, -Wswitch 会在编译期报出来, 而不是让那个按钮默默什么都不做。
     switch (spec->action) {
     case Action::LedOn:
-        std::printf("%s\n", led_onboard_on() == 0 ? "LED 已点亮" : "失败 (开发机无此设备)");
+        outcome = led_onboard_on() == 0 ? "LED 已点亮" : "失败 (开发机无此设备)";
         break;
     case Action::LedOff:
-        std::printf("%s\n", led_onboard_off() == 0 ? "LED 已熄灭" : "失败 (开发机无此设备)");
+        outcome = led_onboard_off() == 0 ? "LED 已熄灭" : "失败 (开发机无此设备)";
         break;
     case Action::LedHeartbeat:
-        std::printf("%s\n", led_onboard_set_heartbeat() == 0 ? "LED 心跳已开启"
-                                                             : "失败 (开发机无此设备)");
+        outcome = led_onboard_set_heartbeat() == 0 ? "LED 心跳已开启"
+                                                   : "失败 (开发机无此设备)";
         break;
     case Action::BuzzerOn:
-        std::printf("%s\n", buzzer_onboard_on() == 0 ? "蜂鸣器已响" : "失败 (开发机无此设备)");
+        outcome = buzzer_onboard_on() == 0 ? "蜂鸣器已响" : "失败 (开发机无此设备)";
         break;
     case Action::BuzzerOff:
-        std::printf("%s\n", buzzer_onboard_off() == 0 ? "蜂鸣器已停" : "失败 (开发机无此设备)");
+        outcome = buzzer_onboard_off() == 0 ? "蜂鸣器已停" : "失败 (开发机无此设备)";
         break;
     case Action::BuzzerHeartbeat:
-        std::printf("%s\n", buzzer_onboard_set_heartbeat() == 0 ? "蜂鸣器心跳已开启"
-                                                                : "失败 (开发机无此设备)");
+        outcome = buzzer_onboard_set_heartbeat() == 0 ? "蜂鸣器心跳已开启"
+                                                      : "失败 (开发机无此设备)";
         break;
     case Action::Nothing:
-        std::printf("(占位, 功能待定)\n");
+        outcome = "(占位, 功能待定)";
         break;
+
+    // 切页: 只改 g_page 并置标志, 底栏由主循环重建 (见 g_page_dirty 的说明)
+    case Action::LedSingleSettingPage:
+        g_page = Page::Led;
+        g_page_dirty = true;
+        page_switch = true;
+        outcome = "进入 LED 调试页";
+        break;
+    case Action::BuzzerSingleSettingPage:
+        g_page = Page::Buzzer;
+        g_page_dirty = true;
+        page_switch = true;
+        outcome = "进入蜂鸣器调试页";
+        break;
+    case Action::BackToHome:
+        g_page = Page::Home;
+        g_page_dirty = true;
+        page_switch = true;
+        outcome = "返回首页";
+        break;
+    }
+
+    std::printf("点击【%s】坐标 (%d,%d) → %s\n", spec->label, px, py, outcome);
+
+    // 切页时页名自己会变, 就不把"进入 xx 页"当成结果留在屏幕上; 设备动作则
+    // 把结果显示出来 —— 板上不用连控制台也能看到刚才那一下成没成。
+    if (page_switch) {
+        g_last_outcome = nullptr;
+    } else {
+        g_last_outcome = outcome;
+        refreshPageLabel();
     }
     std::fflush(stdout);
 }
@@ -417,11 +562,11 @@ void buildHeader(lv_obj_t *scr, int win_w, int bar_h, int margin)
     }
 
     // --- 右: 退出 ---
-    lv_obj_t *quit_btn = createButton(bar, kButtons[0], onClickQuit);
+    lv_obj_t *quit_btn = createButton(bar, kQuitButton, onClickQuit);
     lv_obj_set_size(quit_btn, pct(win_w, 9), bar_h - 26);
 }
 
-// 中间内容区: 主标题 + 一条强调色短线
+// 中间内容区: 主标题 + 一条强调色短线 + 一行小字 (页名 / 上一步结果)
 void buildContent(lv_obj_t *scr, int win_w, int top, int h)
 {
     lv_obj_t *content = createPane(scr);
@@ -445,51 +590,74 @@ void buildContent(lv_obj_t *scr, int win_w, int top, int h)
     lv_obj_set_size(rule, 72, 3);
     lv_obj_set_style_bg_color(rule, lv_color_hex(kColAccent), 0);
     lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
+
+    // 页名 / 上一步结果。切页和每次点按钮之后由 refreshPageLabel() 更新 ——
+    // 板上没接控制台时, 这一行就是"刚才那一下成没成"的唯一反馈。
+    lv_obj_t *status = lv_label_create(content);
+    lv_obj_set_style_text_color(status, lv_color_hex(kColTextDim), 0);
+    if (g_font_status != nullptr) {
+        lv_obj_set_style_text_font(status, g_font_status, 0);
+    }
+    lv_label_set_text(status, kPages[static_cast<int>(g_page)].name);
+    g_page_label = status;
 }
 
-// 底部操作栏: 深色面板 + 顶边分隔线; 功能按钮按 2 行 × 4 个均分。
+// 底部操作栏的容器: 深色面板 + 顶边分隔线。
 //
-// 8 个按钮排一行时每个只有 ~125 px, 中文标签会被挤到换行/截断。改成 2 行后
-// 每个约 243 px, 手指点着也宽裕 (触摸目标建议 ≥ 48 px 见方, 高度由 btn_h 保证)。
+// 容器只建一次, 里面的按钮由 buildPageButtons() 按当前页重建 —— 切页就是
+// "清空底栏, 按新页的按钮表重排"。高度按 maxRows() (所有页里最多的行数) 算,
+// 切页时底栏高度不变, 内容区不会上下跳。
 //
-// 外层竖直 flex、每行横向 flex 均分 —— 加按钮只改 kButtons 表, 布局自动重排,
-// kPerRow 是唯一的"每行几个"参数。
-void buildFooter(lv_obj_t *scr, int win_w, int btn_h, int margin)
+// 外层竖直 flex、每行横向 flex 均分 —— 加按钮只改页表, 布局自动重排,
+// kPerRow 是唯一的"每行几个"参数。返回底栏高度, 供 buildUi 算内容区。
+int buildFooter(lv_obj_t *scr, int win_w, int btn_h, int margin)
 {
-    constexpr int kPerRow = 4;
-    constexpr int kNumRows = (kNumButtons - 1 + kPerRow - 1) / kPerRow;  // 向上取整
-    static_assert(kNumRows >= 1, "至少要有 1 行按钮");
-
     const int row_gap = btn_h / 3;  // 行间距, 随按钮高度缩放
-    const int grid_w = win_w - 2 * margin;
-    const int bar_h = kNumRows * btn_h + (kNumRows - 1) * row_gap + 2 * margin;
+    const int bar_h = maxRows() * btn_h + (maxRows() - 1) * row_gap + 2 * margin;
 
     lv_obj_t *bar = createBar(scr, win_w, bar_h, LV_BORDER_SIDE_TOP);
     lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_pad_all(bar, margin, 0);
     lv_obj_set_style_pad_row(bar, row_gap, 0);
-    // createBar 默认是横向 flex, 这里要竖直排两行
+    // createBar 默认是横向 flex, 这里要竖直排行
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    g_footer_bar = bar;
+    return bar_h;
+}
 
-    for (int r = 0; r < kNumRows; r++) {
-        lv_obj_t *row = createPane(bar);
-        lv_obj_set_size(row, grid_w, btn_h);
+// 按当前页 (g_page) 重建底栏按钮: 初始化和每次切页都走这里。
+// 尺寸不用重算 —— 底栏高度已由 buildFooter 按 maxRows() 固定。
+void buildPageButtons()
+{
+    if (g_footer_bar == nullptr) {
+        return;
+    }
+    lv_obj_clean(g_footer_bar);  // 删掉上一页的按钮
+
+    const PageSpec &page = kPages[static_cast<int>(g_page)];
+    const int grid_w = g_win_w - 2 * g_margin;
+    const int rows = rowsOf(page.count);
+
+    for (int r = 0; r < rows; r++) {
+        lv_obj_t *row = createPane(g_footer_bar);
+        lv_obj_set_size(row, grid_w, g_btn_h);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(row, margin, 0);
+        lv_obj_set_style_pad_column(row, g_margin, 0);
 
-        // 本轮要放的表项: 跳过 [0] (退出按钮在顶栏), 每行放 kPerRow 个。
-        const int first = 1 + r * kPerRow;
-        const int last = (first + kPerRow < kNumButtons) ? (first + kPerRow) : kNumButtons;
+        // 本轮要放的表项: 每行 kPerRow 个, 最后一行可能不满
+        const int first = r * kPerRow;
+        const int last = (first + kPerRow < page.count) ? (first + kPerRow) : page.count;
         for (int i = first; i < last; i++) {
-            lv_obj_t *btn = createButton(row, kButtons[i], onAction);
-            lv_obj_set_height(btn, btn_h);
+            lv_obj_t *btn = createButton(row, page.buttons[i], onAction);
+            lv_obj_set_height(btn, g_btn_h);
             lv_obj_set_flex_grow(btn, 1);
         }
     }
+    refreshPageLabel();
 }
 
 void buildUi(int win_w, int win_h)
@@ -500,23 +668,24 @@ void buildUi(int win_w, int win_h)
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(scr, 0, 0);
 
-    const int margin = pct(win_w, 1);
+    g_win_w = win_w;
+    g_margin = pct(win_w, 1);
 
     // 触摸屏上按钮不能太小 (手指触点约 40~50 px): 取屏高 9%, 限制 36..64
-    int btn_h = pct(win_h, 9);
-    if (btn_h < 36) {
-        btn_h = 36;
+    g_btn_h = pct(win_h, 9);
+    if (g_btn_h < 36) {
+        g_btn_h = 36;
     }
-    if (btn_h > 64) {
-        btn_h = 64;
+    if (g_btn_h > 64) {
+        g_btn_h = 64;
     }
 
     const int header_h = pct(win_h, 11);
-    const int footer_h = btn_h + 2 * margin;
 
-    buildHeader(scr, win_w, header_h, margin);
+    buildHeader(scr, win_w, header_h, g_margin);
+    const int footer_h = buildFooter(scr, win_w, g_btn_h, g_margin);
     buildContent(scr, win_w, header_h, win_h - header_h - footer_h);
-    buildFooter(scr, win_w, btn_h, margin);
+    buildPageButtons();  // 首页
 }
 
 // 开发机窗口模式下给鼠标画个指针。板上是触摸屏, 而且 LVGL 的 X11 后端
@@ -655,17 +824,30 @@ int main(int argc, char **argv)
         addMouseCursor();
     }
 
-    std::printf("  布局   : 深色工业风 —— 顶栏(品牌/状态灯/退出) + 内容区 + "
-                "底栏 %d 个功能按钮 (2 行)\n", kNumButtons - 1);
+    std::printf("  布局   : 深色工业风 —— 顶栏(品牌/状态灯/退出) + 内容区 + 分页底栏"
+                " (%d 页, 首页 %d 个按钮)\n",
+                countOf(kPages), kPages[static_cast<int>(Page::Home)].count);
     std::printf("\n交互:\n");
     std::printf("  点右上角【退出】   退出程序\n");
-    std::printf("  点底部功能按钮     控制板载 LED / 蜂鸣器 (未绑定的打印占位提示)\n");
-    std::printf("  按 q / Esc        退出程序\n");
+    std::printf("  首页点【LED 调试】/【蜂鸣器 调试】  进对应调试页, 页内末位【返回】回首页\n");
+    std::printf("  调试页里点按钮     单独控制板载 LED / 蜂鸣器 (未绑定的打印占位提示)\n");
+    std::printf("  按 q / Esc        退出程序 (每一页都一样)\n");
     std::fflush(stdout);
 
     g_start_tick = lv_tick_get();
 
     while (!g_quit) {
+        // 切页在这里落地: 事件回调只置标志, 避免在派发点击的过程中删掉底栏
+        // (见 g_page_dirty 的说明)。重建完刷新内容区那行小字。
+        if (g_page_dirty) {
+            g_page_dirty = false;
+            buildPageButtons();
+            std::printf("切换到 %s (底栏 %d 个按钮)\n",
+                        kPages[static_cast<int>(g_page)].name,
+                        kPages[static_cast<int>(g_page)].count);
+            std::fflush(stdout);
+        }
+
         // X11 后端自己有两个定时器在读 X 事件 (显示 5 ms / 输入 1 ms),
         // 这里只需要按 LVGL 给的间隔循环调用即可。
         uint32_t idle = lv_timer_handler();

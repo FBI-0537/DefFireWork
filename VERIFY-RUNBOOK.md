@@ -158,6 +158,9 @@ sudo apt install libgpiod2
 
 不想要这个依赖就在构建时 `-DWITH_GPIOD=OFF` 重新交叉编译（README §5.5）。
 
+（顺带：要看 GPIO 接线/占用情况时装上工具 —— `sudo apt install gpiod`，
+里面是 `gpiodetect` / `gpioinfo`。传感器接线确认见 workflow.md §2.3。）
+
 ### 2.3 `[板]` 首次：一次性权限配置
 
 ```bash

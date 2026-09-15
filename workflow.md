@@ -61,12 +61,18 @@ gui.cpp  ──> 自己的 main()、自己的 LVGL 循环
 ### 2.3 传感器模块（0%，但有骨架）
 
 代码量还是 0。现在只有一条通道：`useable_tools::gpio_read_value()`（libgpiod v1），
-依赖链已配齐 —— `armhf-toolchain/Dockerfile` 里装了 `libgpiod-dev:armhf`，
+依赖链已配齐 —— `armhf-toolchain/Dockerfile` 里装了 `libgpiod-dev:armhf`（1.6.3，v1），
 CMake 用 `WITH_GPIOD`（默认 AUTO）控制，见 README §5.5。
+
+**只支持 v1 API**：`gpiod_chip_open_by_label` / `gpiod_line_request_input` 这套在
+**v2 里被删了**。容器与板子（Debian 12）是 1.6.3 = v1，可用；**Fedora 44 是 2.2.5 = v2**，
+所以原生 Fedora 构建拿不到这个功能（CMake 会认出版本不符并明确跳过，不会拿一堆
+"未声明标识符"糊你一脸）。要在原生环境用它，得先把 `gpio_read_value()` 移植到 v2。
 
 **动手前必须先确认（现在全是未知）**：
 
-1. **传感器到底接在哪个 gpiochip、哪几条线上？** 用 `gpiodetect` / `gpioinfo` 在板上查。
+1. **传感器到底接在哪个 gpiochip、哪几条线上？** 板上 `sudo apt install gpiod` 后用
+   `gpiodetect` / `gpioinfo` 查。
 2. **那些线是不是已经被内核占用了？** `gpioinfo` 里看 "used by"。
    板载 LED / 蜂鸣器已经归 `leds-gpio` 驱动持有，再 `request` 会失败（EBUSY）——
    这也是为什么它们**必须**继续走 sysfs，而不是 libgpiod。

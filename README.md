@@ -165,6 +165,7 @@ BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
 sudo apt install g++ libx11-dev libfreetype-dev cmake     # 若要在板上原生编译
 sudo apt install libgpiod-dev                             # 同上, 且要编 GPIO 读取时
 sudo apt install xinput x11-utils x11-apps                # 排查触摸/显示时才需要
+sudo apt install gpiod                                    # 排查 GPIO 时才需要 (gpiodetect / gpioinfo)
 ```
 
 **运行时依赖**：
@@ -345,18 +346,30 @@ sudo reboot
 
 ### 5.5 可选依赖（CMake 选项）
 
-| 选项 | 默认 | 作用 | 找不到时 |
+| 选项 | 默认 | 作用 | 不满足时 |
 |---|---|---|---|
 | `WITH_GUI` | `AUTO` | 编 LVGL 界面（`deffire-gui-dev`） | 原生：警告并跳过；交叉：`ON` 时直接报错 |
 | `WITH_GPIOD` | `AUTO` | 编 `gpio_read_value()`（GPIO 开关量输入，传感器用） | 明确打印一句"不编入产物"并继续；`ON` 时直接报错 |
 
 ```bash
 cmake -B build -S . -DWITH_GPIOD=OFF     # 完全不依赖 libgpiod
-cmake -B build -S . -DWITH_GPIOD=ON      # 必须要有 libgpiod, 没有就报错
+cmake -B build -S . -DWITH_GPIOD=ON      # 必须要有可用的 libgpiod, 否则报错
 ```
 
-`AUTO` 的意思是"有就编、没有就跳过，**并且说一声**"——跳过时 `gpio_read_value()`
-仍然存在，但会打印一行提示并返回 `-1`（不静默返回"低电平"这种假数据）。
+`AUTO` 的意思是"有**可用版本**就编、否则跳过，**并且说一声**"——跳过时
+`gpio_read_value()` 仍然存在，但会打印一行提示并返回 `-1`（不静默返回"低电平"
+这种假数据）。
+
+> ⚠ **只支持 libgpiod v1**：代码里用的是 `gpiod_chip_open_by_label` /
+> `gpiod_line_request_input` 这套 v1 API，**v2 把这些符号全删了**。
+>
+> | 环境 | libgpiod | 结果 |
+> |---|---|---|
+> | armhf 容器 / 板子（Debian 12 bookworm） | 1.6.3 | ✅ 编入 |
+> | Fedora 44（原生开发机） | 2.2.5 | ❌ 找到但不编入（`ON` 时报错） |
+>
+> 所以**原生 Fedora 构建拿不到这个功能**，装了 `libgpiod-devel` 也一样；要用就得先把
+> `gpio_read_value()` 移植到 v2 API。交叉编译/板上不受影响。
 
 板载 LED / 蜂鸣器**不需要** libgpiod（走 `/sys/class/leds/*`）；要它的是接在
 GPIO 上的火焰/人体/光电那类开关量传感器（见第 10 节待办）。

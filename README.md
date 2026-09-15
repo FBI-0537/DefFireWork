@@ -58,6 +58,9 @@
 - [10. 待办](#10-待办)
 
 > **动手改代码前先看 [WARNING.md](WARNING.md)** —— 踩坑记录、已知问题、未验证项都在那里。
+>
+> **刚接手这个项目？先看 [HANDOFF.md](HANDOFF.md)** —— 现状、结论、待办的单页汇总，
+> 读完就能开工，不用回溯历史对话。
 
 ---
 
@@ -176,17 +179,21 @@ sudo apt install xinput x11-utils x11-apps                # 排查触摸/显示�
 
 ```bash
 ./build.sh native      # 原生 x86-64：配置 + 构建 + ctest
-./build.sh run         # 原生构建后运行【控制台程序】（不开窗口）
-./build.sh gui         # 原生构建后打开【GUI 窗口】（1024x600）
 ./build.sh gui-full    # 原生 GUI，全屏
-./build.sh armhf       # 交叉编译纯逻辑层 + 控制台（Zig，无 GUI）
 ./build.sh gui-armhf   # 交叉编译 GUI（容器，需 docker/podman）
-./build.sh all         # 原生 + armhf
+./build.sh all         # 原生 + gui-armhf
 ./build.sh clean       # 删除构建目录
-./build.sh verify      # 只做 armhf 产物结构验证
 ```
 
-**最常见的困惑**：`./build.sh run` 跑的是**控制台程序，不开窗口**。看窗口用 `./build.sh gui`。
+`gui-armhf` 后面的额外参数会转给 `armhf-toolchain/build-armhf.sh`：
+
+```bash
+./build.sh gui-armhf --rebuild      # 先重建环境镜像再编译
+./build.sh gui-armhf --shell        # 进容器交互
+```
+
+> Zig 旧路径（`run` / `gui` / `armhf` / `verify` 四个模式）**已删除**。
+> 想看开发机的窗口模式，直接跑二进制：`./build/deffire-gui-dev --windowed`。
 
 ### 5.2 直接用 CMake
 

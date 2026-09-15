@@ -523,5 +523,5 @@ sudo udevadm control --reload-rules && sudo reboot
 | 触摸内核认到但 X 不认 | X server 没加载 evdev/libinput 驱动 | 装 `xserver-xorg-input-libinput`，查 `/var/log/Xorg.0.log` |
 | `xdpyinfo: unable to open display ""` | ssh/串口会话里 `DISPLAY` 为空；Xorg 还带 `-auth` | `export DISPLAY=:0`，必要时设 `XAUTHORITY` |
 | 系统里没有 `gcc-arm-linux-gnu` | Fedora 不提供这个包名 | 本项目交叉编译走容器，不需要它 |
-| 全屏下 34/40 号字观感偏大 | 设计如此（`kBigFontPx` / `kSmallFontPx`），板子 1024×600 | 改 `src/gui.cpp` 里这两个常量 |
+| 全屏下 40/18/16 号字观感偏大 | 设计如此（`kBigFontPx` / `kSmallFontPx` / `kStatusFontPx`），板子 1024×600 | 改 `src/gui.cpp` 里这三个常量 |
 | `#include <linux/...>` 交叉编译能用，`<X11/...>` 不能 | 前者是内核 UAPI（Zig 自带 611 个），后者是外部库 | 后者需要 sysroot，见 [B-6](#b-6-zig-不带任何-x11-头文件) |

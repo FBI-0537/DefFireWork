@@ -22,10 +22,11 @@
 // 各阶段做什么, 见下面每个函数的注释。
 // 定义在本文件后面, 但 cpp_start() 在上面就要用 —— C++ 必须先声明后使用,
 // 少了这几行会报 'device_init' was not declared in this scope。
-int device_init();
-int status();
-int gui_build();
-int render();
+
+int device_init();  
+int status();       
+int gui_build();    
+int render();       
 
 int cpp_start()
 {
@@ -100,7 +101,7 @@ int render()
 // 返回值交给调用者处理: 开发机上这个路径不存在, 会返回 -1,
 // 所以失败是常态, 不要在这里 printf 刷屏。
 //
-//需要注意的是，这些硬件都是主板原有的硬件，所以加上_onboard_，以区分。
+// 需要注意的是，这些硬件都是主板原有的硬件，所以加上_onboard_，以区分。
 //
 // ---------------------------------------------------------------------------
 // **先写 trigger="none", 再写 brightness —— 顺序不能反**

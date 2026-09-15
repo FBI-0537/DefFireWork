@@ -146,7 +146,19 @@ scp build-armhf\deffire-gui-dev build-armhf\TOOLCHAIN.txt armhf-toolchain\setup-
 ./armhf-toolchain/deploy-to-board.sh fbi@<板子IP>      # 加 --run 传完直接启动
 ```
 
-### 2.2 `[板]` 首次：一次性权限配置
+### 2.2 `[板]` 先装运行时库（否则界面根本起不来）
+
+```bash
+sudo apt install libgpiod2
+```
+
+产物链着 `libgpiod.so.2`（`gpio_read_value()` 用它）。**缺这个库不是"传感器不能用"，
+是整个 GUI 起不来** —— 动态链接器在 `main()` 之前就报
+`error while loading shared libraries: libgpiod.so.2`。§3 的预检会把缺的库列出来。
+
+不想要这个依赖就在构建时 `-DWITH_GPIOD=OFF` 重新交叉编译（README §5.5）。
+
+### 2.3 `[板]` 首次：一次性权限配置
 
 ```bash
 sudo bash ~/Desktop/setup-board-permissions.sh fbi
@@ -198,7 +210,7 @@ bash verify-on-board.sh ./deffire-gui-dev ./TOOLCHAIN.txt   # 脚本需先 scp �
 - 出现 `✗ 板上缺 readelf/file/ldconfig` 时，脚本**故意判失败**（WARNING D-2 的教训）。
   装齐再跑：`sudo apt install binutils file`。**不要**接受一次"跳过了检查却报匹配"的结果。
 - 三个字体路径之一被 `✓` 命中（板子上应是 `/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc`）。
-- `NEEDED` 逐个 `✓`（预期 `libX11.so.6`、`libfreetype.so.6`、`libstdc++.so.6`、`libgcc_s.so.1`、`libc.so.6`）。
+- `NEEDED` 逐个 `✓`（预期 `libX11.so.6`、`libfreetype.so.6`、`libgpiod.so.2`、`libstdc++.so.6`、`libgcc_s.so.1`、`libc.so.6`；少任何一个都要先解决，`libgpiod.so.2` 缺了整个界面起不来）。
 - 记录：`uname -m` / `uname -r` / glibc 版本 / 内存 / `/tmp/.X11-unix/X0` 是否存在。
 
 ---
@@ -332,7 +344,8 @@ DISPLAY=:0 wmctrl -lG
 
 | 现象 | 真相 |
 |---|---|
-| 点按钮打印 `失败 (开发机无此设备)` | 代码里**权限不足**与**设备不存在**共用这一条字符串。板上出现它，先查 §2.2 的权限，别急着改代码 |
+| 点按钮打印 `失败 (开发机无此设备)` | 代码里**权限不足**与**设备不存在**共用这一条字符串。板上出现它，先查 §2.3 的权限，别急着改代码 |
+| GUI 完全起不来，报 `error while loading shared libraries: libgpiod.so.2` | 板上没装运行时库：`sudo apt install libgpiod2`（见 §2.2）。**不是**传感器功能的问题 |
 | 启动后点几下没反应，打印 `忽略启动瞬间的点击 (启动后 xxx ms)` | 有意为之：`kIgnoreClicksMs = 400`，挡窗口映射瞬间的杂散 ButtonPress |
 | 屏幕中央大字是 `halloworld` | **有意保留**（WARNING A-3）。要改只动 `src/gui.cpp` 的 `kText` |
 | 首页只有 3 个按钮、找不到 LED/蜂鸣器的开关 | 界面是分页的：先进【LED 调试】/【蜂鸣器 调试】，6 个硬件按钮在各自的调试页里 |
@@ -366,10 +379,11 @@ DISPLAY=:0 wmctrl -lG
 **2026-09-15 在 Fedora 上的回归结果**（供 Windows 侧对照"正常长什么样"）：
 
 - `./build.sh gui-armhf --rebuild` 退出码 **0**；环境镜像 12 步全部命中缓存，未联网。
-- 产物 `deffire-gui-dev` 403804 字节、`deffire-dev` 5648 字节；
-  sha256 与构建前**逐字节一致**（`c73d670c…` / `6ddb8427…`），即当前配置下构建可复现。
+- 产出 `deffire-gui-dev` **407,936 字节**、`deffire-dev` 5,648 字节；
+  连跑两次 sha256 **完全相同**（`6b2c14d2…`），即当前配置下构建可复现。
+  （接入 libgpiod 之前是同源 403,804 字节 / `c73d670c…`，同样是两次一致。）
 - `file`：`ELF 32-bit LSB pie executable, ARM, EABI5`。
-- `NEEDED`：`libX11.so.6`、`libfreetype.so.6`、`libstdc++.so.6`、`libgcc_s.so.1`、`libc.so.6`。
+- `NEEDED`：`libX11.so.6`、`libfreetype.so.6`、**`libgpiod.so.2`**、`libstdc++.so.6`、`libgcc_s.so.1`、`libc.so.6`。
 - **零警告已复核**：`./build.sh gui-armhf` 打印的是**过滤后**的输出
   （`grep -E '^\s*\[|Class:|Machine:|Flags:|error|Error|FAIL'`），所以一次正常构建
   只能证明"没有 error"，**证明不了"0 警告"**。同日另跑一次全量日志（389 行、

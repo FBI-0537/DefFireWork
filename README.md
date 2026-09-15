@@ -71,7 +71,7 @@
 | `deffire-gui-dev` | `src/gui.cpp` | **LVGL 图形界面**（X11 后端） | ✅ |
 | `deffire-dev` | `src/main.cpp` | 控制台程序，打印 `hallo world` | ✅ |
 | `test_greeting` | `tests/test_greeting.cpp` | 单元测试，`ctest` 调用 | ❌ 交叉产物跑不了 |
-| `libfirecontrol.a` | `src/greeting.cpp` | 纯逻辑层静态库，上面几个都链接它 | ✅ |
+| `libfirecontrol.a` | `src/greeting.cpp` `src/usetools.cpp` `src/start.cpp` | 纯逻辑 / 硬件层静态库（`usetools` = 文件读写 + GPIO 读取，`start` = 板载设备控制），上面几个都链接它 | ✅ |
 
 ---
 
@@ -163,11 +163,19 @@ BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
 
 ```bash
 sudo apt install g++ libx11-dev libfreetype-dev cmake     # 若要在板上原生编译
+sudo apt install libgpiod-dev                             # 同上, 且要编 GPIO 读取时
 sudo apt install xinput x11-utils x11-apps                # 排查触摸/显示时才需要
 ```
 
-**运行时依赖**（板上通常已具备，X 桌面自带）：
-`libX11.so.6` / `libfreetype.so.6`，以及中文字体 `fonts-wqy-zenhei`。
+**运行时依赖**：
+`libX11.so.6` / `libfreetype.so.6`（X 桌面自带），中文字体 `fonts-wqy-zenhei`，
+以及 **`libgpiod2`**（`sudo apt install libgpiod2`）。
+
+> ⚠ `libgpiod2` 是**硬依赖**：交叉编译出来的 `deffire-gui-dev` 链着
+> `libgpiod.so.2`（`gpio_read_value()` 用它）。板上没有这个库时**整个界面起不来**
+> ——动态链接器在 `main()` 之前就会报 `error while loading shared libraries`，
+> 不是"传感器功能不可用"那么局部。`verify-on-board.sh` 会把缺失的库逐个列出来。
+> 不想要这个依赖就 `WITH_GPIOD=OFF` 重新构建（见 §5）。
 
 **内存约束**是选型依据：裸 Xlib 约 2–4 MiB，GTK4 空程序要 40–80 MiB。
 当前用的 LVGL + FreeType 实测常驻约 **136 MB / 437 MB**。
@@ -335,6 +343,24 @@ sudo reboot
   中间内容区 460 px。底栏高度按**所有页里最多的行数**算（`maxRows()`），
   所以切页时底栏高度不变、内容区不会上下跳。
 
+### 5.5 可选依赖（CMake 选项）
+
+| 选项 | 默认 | 作用 | 找不到时 |
+|---|---|---|---|
+| `WITH_GUI` | `AUTO` | 编 LVGL 界面（`deffire-gui-dev`） | 原生：警告并跳过；交叉：`ON` 时直接报错 |
+| `WITH_GPIOD` | `AUTO` | 编 `gpio_read_value()`（GPIO 开关量输入，传感器用） | 明确打印一句"不编入产物"并继续；`ON` 时直接报错 |
+
+```bash
+cmake -B build -S . -DWITH_GPIOD=OFF     # 完全不依赖 libgpiod
+cmake -B build -S . -DWITH_GPIOD=ON      # 必须要有 libgpiod, 没有就报错
+```
+
+`AUTO` 的意思是"有就编、没有就跳过，**并且说一声**"——跳过时 `gpio_read_value()`
+仍然存在，但会打印一行提示并返回 `-1`（不静默返回"低电平"这种假数据）。
+
+板载 LED / 蜂鸣器**不需要** libgpiod（走 `/sys/class/leds/*`）；要它的是接在
+GPIO 上的火焰/人体/光电那类开关量传感器（见第 10 节待办）。
+
 ---
 
 ## 6. VS Code 配置
@@ -412,7 +438,7 @@ build-debug/         Debug 构建
 | 容器镜像构建 | ✅ 通过（`bookworm-slim` + gcc-arm 12 + cmake 3.25.1） |
 | 镜像自检 | ✅ 能交叉编译 X11+FreeType 的 armhf 程序；pkg-config 指向 armhf |
 | 容器内交叉编译 | ✅ LVGL 全量 + `deffire-gui-dev` 链接成功 |
-| **armhf 产物** | **403,816 字节**，`ELF32 / ARM / hard-float`，依赖 `libX11` / `libfreetype` / `libstdc++` / `libgcc_s` / `libc`；同源同镜像重建 sha256 逐字节一致（可复现） |
+| **armhf 产物** | **407,936 字节**，`ELF32 / ARM / hard-float`，依赖 `libX11` / `libfreetype` / **`libgpiod`** / `libstdc++` / `libgcc_s` / `libc`；同源同镜像重建 sha256 逐字节一致（可复现） |
 | 上板实测（LVGL 版） | ❌ **还没做** —— 见 [WARNING.md A-1](WARNING.md#a-当前遗留问题) |
 | 上板实测（老 Xlib+Xft 版） | ✅ 曾通过（窗口正常、中文正常），但该版本已被 LVGL 版取代 |
 
@@ -427,4 +453,6 @@ build-debug/         Debug 构建
 - [ ] **实测 Openbox 下是否真全屏**：板上跑一次无参 `./deffire-gui-dev`，看窗口有没有被
       加标题栏 / 留边距。没铺满就要发 `_NET_WM_STATE_FULLSCREEN`（见 WARNING.md C-7）
 - [ ] 填充占位按钮【功能 8】的实际功能（其余按钮都已接上板载设备）
-- [ ] 传感器模块（当前 0%）
+- [ ] 传感器模块（当前 0%）：骨架已有（`gpio_read_value()` + `WITH_GPIOD`），但**要先上板
+      确认传感器接在哪个 gpiochip / 哪条线**、那些线是否已被内核占用 —— 见
+      [workflow.md](workflow.md) §2.3

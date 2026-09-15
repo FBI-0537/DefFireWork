@@ -23,6 +23,7 @@
 | Windows 交叉编译（`build-armhf.ps1`） | ❌ **从未执行过** | 开发机没有 `pwsh`；步骤见 runbook §1 |
 | 板上实测（LVGL 版） | ❌ **还没做** | README §10、WARNING A-1；逐项判据见 runbook §3–§4 |
 | 原生 GUI（开发机预览） | ✅ 三页正常 | 首页 / LED 调试页 / 蜂鸣器调试页：切页、按钮派发、退出路径都实测过 |
+| GPIO 输入（libgpiod） | ⚠ 只有骨架 | 依赖链已配齐并交叉编译通过；**没有任何调用点**，板端也没验过（不知道传感器接在哪个 gpiochip / 哪条线上） |
 
 ---
 
@@ -56,6 +57,25 @@ gui.cpp  ──> 自己的 main()、自己的 LVGL 循环
 板上有 Openbox，窗口大概率被加装饰（开发机上实测：请求 1024x600，实际报 1074x687）。
 要真铺满得在建窗口后发 `_NET_WM_STATE_FULLSCREEN`（走 EWMH）——**现在没实现**。
 先按 runbook §4.3 上板确认有没有被加标题栏，再决定写不写。详见 WARNING C-7。
+
+### 2.3 传感器模块（0%，但有骨架）
+
+代码量还是 0。现在只有一条通道：`useable_tools::gpio_read_value()`（libgpiod v1），
+依赖链已配齐 —— `armhf-toolchain/Dockerfile` 里装了 `libgpiod-dev:armhf`，
+CMake 用 `WITH_GPIOD`（默认 AUTO）控制，见 README §5.5。
+
+**动手前必须先确认（现在全是未知）**：
+
+1. **传感器到底接在哪个 gpiochip、哪几条线上？** 用 `gpiodetect` / `gpioinfo` 在板上查。
+2. **那些线是不是已经被内核占用了？** `gpioinfo` 里看 "used by"。
+   板载 LED / 蜂鸣器已经归 `leds-gpio` 驱动持有，再 `request` 会失败（EBUSY）——
+   这也是为什么它们**必须**继续走 sysfs，而不是 libgpiod。
+   ⚠ 这条是推断，按"不要凭推断断定硬件行为"的规矩：**上板用 `gpioinfo` 实测确认**。
+3. 板端要装运行时库：`sudo apt install libgpiod2`。**不装整个界面起不来**（不是局部功能失效），
+   因为交叉产物链着 `libgpiod.so.2`；`verify-on-board.sh` 会把缺失的库列出来。
+
+`~/下载/` 里那份官方 `main.c` 用的是"综合例程扩展板"的 GPIO 配置（3 个 LED、蜂鸣器走
+`EV_SND`），**和手上这块底板不是一回事** —— 可以看它怎么调 libgpiod，但引脚编号别照抄。
 
 ---
 

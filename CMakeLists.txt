@@ -227,16 +227,23 @@ endif()
 # 需要它的是接在 GPIO 上的开关量输入（火焰/人体/光电这类传感器），
 # 由 useable_tools::gpio_read_value() 读取。
 #
-# 默认 AUTO: 有 libgpiod 就编进去，没有就**明确说一声**并跳过 ——
+# 默认 AUTO: 有**可用版本**的 libgpiod 就编进去，否则明确说一声并跳过 ——
 #   既不静默（那样"功能没编进去"会被当成"代码没写"），
 #   也不因此让整个构建失败（开发机上没装 libgpiod-devel 时 GUI 仍然要能编）。
-# 要强制要求就 -DWITH_GPIOD=ON，找不到直接 FATAL_ERROR。
+# 要强制要求就 -DWITH_GPIOD=ON，条件不满足直接 FATAL_ERROR。
+#
+# ⚠ **只支持 v1 API**（见 usetools.cpp）：v2 把那些符号全删了。
+#     armhf 容器 / 板子: Debian 12 bookworm = 1.6.3 (v1) —— 可用
+#     Fedora 44        : 2.2.5 (v2)                      —— **不可用**
+#   所以原生 Fedora 构建即使装了 libgpiod-devel，也是"找到但版本不对 -> 不编入"；
+#   想原生用就得先把 gpio_read_value() 移植到 v2 API。见 workflow.md §2.3。
 #
 # 依赖从哪来:
-#   armhf 容器   : armhf-toolchain/Dockerfile 里装了 libgpiod-dev:armhf
-#   Fedora 原生  : sudo dnf install libgpiod-devel
+#   armhf 容器   : armhf-toolchain/Dockerfile 里装了 libgpiod-dev:armhf (1.6.3, v1)
 #   Debian/Ubuntu: sudo apt install libgpiod-dev
-# 板上跑的时候还需要运行时库: sudo apt install libgpiod2
+#   Fedora       : sudo dnf install libgpiod-devel   (2.x = v2, 当前用不了)
+# 板上跑的时候还需要运行时库: sudo apt install libgpiod2 (bookworm = 1.6.3, v1)
+# 板上排查用的工具(gpiodetect / gpioinfo): sudo apt install gpiod
 # ---------------------------------------------------------------------------
 set(WITH_GPIOD "AUTO" CACHE STRING "是否编译 GPIO 读取 (ON / OFF / AUTO)")
 set_property(CACHE WITH_GPIOD PROPERTY STRINGS ON OFF AUTO)
@@ -247,7 +254,13 @@ if(NOT WITH_GPIOD STREQUAL "OFF")
         pkg_check_modules(GPIOD_DEPS QUIET libgpiod)
     endif()
 
-    if(GPIOD_DEPS_FOUND)
+    # 版本闸门: 找到 v2 却硬编, 只会得到一堆"未声明标识符", 看起来像代码写错了。
+    set(_gpiod_v1 FALSE)
+    if(GPIOD_DEPS_FOUND AND GPIOD_DEPS_VERSION VERSION_LESS 2.0)
+        set(_gpiod_v1 TRUE)
+    endif()
+
+    if(_gpiod_v1)
         # 宏必须是 PUBLIC: usetools.h 的声明与 usetools.cpp 的实现要看到同一个值,
         # 否则会出现"声明了但没实现"(或反过来)的链接期错误。
         target_compile_definitions(firecontrol PUBLIC FC_HAVE_GPIOD=1)
@@ -255,23 +268,36 @@ if(NOT WITH_GPIOD STREQUAL "OFF")
         target_link_directories(firecontrol PUBLIC ${GPIOD_DEPS_LIBRARY_DIRS})
         target_link_libraries(firecontrol PUBLIC ${GPIOD_DEPS_LIBRARIES})
 
-        message(STATUS "GPIO: libgpiod ${GPIOD_DEPS_VERSION} —— gpio_read_value() 已编入")
+        message(STATUS "GPIO: libgpiod ${GPIOD_DEPS_VERSION} (v1) —— gpio_read_value() 已编入")
         message(STATUS "     libs: ${GPIOD_DEPS_LIBRARIES}")
+    elseif(WITH_GPIOD STREQUAL "ON" AND GPIOD_DEPS_FOUND)
+        message(FATAL_ERROR
+            "WITH_GPIOD=ON 但找到的是 libgpiod ${GPIOD_DEPS_VERSION} (v2),\n"
+            "而 gpio_read_value() 用的是 v1 API (gpiod_chip_open_by_label 等)。\n"
+            "\n"
+            "  - 交叉编译/板上: 用 armhf-toolchain 的容器, 里面是 1.6.3 (v1), 直接可用\n"
+            "  - 原生 Fedora  : Fedora 44 只有 2.x, 要用得先把 gpio_read_value() 移植到 v2\n"
+            "  - 或者: -DWITH_GPIOD=OFF 明确不要这个功能")
     elseif(WITH_GPIOD STREQUAL "ON")
         message(FATAL_ERROR
             "WITH_GPIOD=ON 但 pkg-config 找不到 libgpiod。\n"
             "\n"
-            "    Fedora:        sudo dnf install libgpiod-devel\n"
             "    Debian/Ubuntu: sudo apt install libgpiod-dev\n"
+            "    Fedora:        sudo dnf install libgpiod-devel   (注意 Fedora 44 是 v2, 用不了)\n"
             "\n"
             "交叉编译走 armhf-toolchain 的容器即可 —— 镜像里已装 libgpiod-dev:armhf,\n"
             "但**镜像需要重建**才会带上它:\n"
             "\n"
             "    ./armhf-toolchain/build-armhf.sh --rebuild")
+    elseif(GPIOD_DEPS_FOUND)
+        message(STATUS
+            "GPIO: 找到的是 libgpiod ${GPIOD_DEPS_VERSION} (v2), 而代码用的是 v1 API\n"
+            "      -> gpio_read_value() 不编入产物 (会返回 -1 并打印提示)。\n"
+            "      交叉编译/板上用的是容器里的 1.6.3 (v1), 不受影响; 见 workflow.md §2.3")
     else()
         message(STATUS
             "GPIO: 未找到 libgpiod, gpio_read_value() 不编入产物 (会返回 -1 并打印提示)。\n"
-            "      传感器模块要用它, 原生开发机上装 libgpiod-devel 即可; 详见 workflow.md")
+            "      交叉编译/板上走容器(1.6.3, v1), 不受影响; 见 workflow.md §2.3")
     endif()
 endif()
 

@@ -226,11 +226,31 @@ fi
 #
 # podman/docker 都没有"从镜像直接拷文件"的命令, 标准做法是先 create 一个容器
 # 再 cp。create 不启动容器, 所以很快。
+#
+# **先清掉上一次的产物** —— 这一步不能省:
+#   cp 失败时不会覆盖目标文件, 上一次的同名旧产物就留在那儿了。下面那句
+#   "逐个检查产物是否存在"于是会看到旧文件、判定成功 —— 用旧产物冒充了本次构建。
+#   (产物改名那次也留下过 halloworld-* 与 deffire-* 并存的情况。)
+#   删不掉就直接失败: 留着旧文件比构建失败更危险。
 # ---------------------------------------------------------------------------
 c_info "=== 取回产物 ==="
 mkdir -p "$BUILD_DIR"
+
+ARTIFACTS=(deffire-gui-dev deffire-dev)
+for f in "${ARTIFACTS[@]}"; do
+    if [ -e "$BUILD_DIR/$f" ]; then
+        rm -f "$BUILD_DIR/$f"
+        if [ -e "$BUILD_DIR/$f" ]; then
+            c_err "✗ 旧产物删不掉: $BUILD_DIR/$f"
+            c_err "   (多半被其它进程占用, 检查有没有正在运行的同名程序)"
+            exit 1
+        fi
+        printf '  已清掉旧产物 %s\n' "$f"
+    fi
+done
+
 CID="$("$RUNTIME" create "$BUILD_IMAGE")"
-for f in deffire-gui-dev deffire-dev; do
+for f in "${ARTIFACTS[@]}"; do
     if "$RUNTIME" cp "$CID:/work/build-armhf/$f" "$BUILD_DIR/$f" 2>/dev/null; then
         printf '  ✓ %s\n' "$f"
     else
@@ -268,8 +288,9 @@ echo
 c_info "=== 产物 ==="
 # 逐个检查而不是"至少有一个就算过": 两个目标由同一次 cmake 产出, 少任何一个都
 # 说明构建不完整。原来只判断"一个都没有", GUI 缺失而控制台在时会被漏掉。
+# 清单复用上面的 ARTIFACTS, 只写一处。
 MISSING=()
-for exe in deffire-gui-dev deffire-dev; do
+for exe in "${ARTIFACTS[@]}"; do
     f="$BUILD_DIR/$exe"
     if [ -f "$f" ]; then
         printf '  %-20s %9s 字节  %s\n' "$exe" "$(stat -c %s "$f")" \

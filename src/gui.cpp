@@ -91,6 +91,14 @@ constexpr uint32_t kIgnoreClicksMs = 400;
 // 主循环最长休眠时间, 防止 LVGL 给出的间隔异常时睡死。
 constexpr uint32_t kMaxSleepMs = 10;
 
+// 指针输入采样周期 (ms)。LVGL 默认把它建成 LV_DEF_REFR_PERIOD —— 但"画面多久
+// 更新一次"和"多久看一眼有没有按下"是两件事。X11 后端的输入处理只保存最新状态
+// (lv_x11_input.c: 按下置 true、松开置 false), 所以一次按下+松开如果落在同一个
+// 采样窗口里, 这次点击**整次消失**。
+// 实测 (2026-09-15, XTest 注入计时): 默认周期下按住 10ms 的快点击丢 60%;
+// 采样压到 5ms 后同条件 0 丢失。详见 lv_conf.h 的 LV_DEF_REFR_PERIOD 注释。
+constexpr uint32_t kIndevReadMs = 5;
+
 // 单位换算: 布局按相对比例算, 换屏幕尺寸不用改代码。
 constexpr int pct(int total, int percent) { return total * percent / 100; }
 
@@ -806,6 +814,18 @@ int main(int argc, char **argv)
     }
     lv_x11_inputs_create(g_disp, nullptr);
     lv_display_add_event_cb(g_disp, onDisplayDeleted, LV_EVENT_DELETE, nullptr);
+
+    // 输入采样压得比刷新快: 刷新 16ms 一次决定"画面多久更新", 采样 5ms 一次决定
+    // "多久看一眼有没有按下"。两者用同一个值会让快点击被整次吞掉(见 kIndevReadMs)。
+    for (lv_indev_t *indev = lv_indev_get_next(nullptr); indev != nullptr;
+         indev = lv_indev_get_next(indev)) {
+        if (lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER) {
+            lv_timer_t *timer = lv_indev_get_read_timer(indev);
+            if (timer != nullptr) {
+                lv_timer_set_period(timer, kIndevReadMs);
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // q / Esc 要能全局生效

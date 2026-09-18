@@ -104,6 +104,21 @@
  * DIRECT_EXIT = 0: 窗口关闭时不让 LVGL 直接 exit(0), 而是走我们自己的
  * LV_EVENT_DELETE 回调做清理 (删字体、lv_deinit)。
  */
+/**
+ * 刷新周期 (ms)。LVGL 默认 33 —— 这个值同时决定两件事:
+ *   1. 屏幕刷新检查: 有没有失效区域要重画 (lv_display.c)
+ *   2. indev 的**输入采样周期** (lv_indev.c 用它建 read_timer)
+ *
+ * 33 ms 意味着"按下"最多要等 33 ms 才被处理一遍, 界面明显不跟手。
+ * 实测 (2026-09-15, 用 XTest 注入点击并计时, 见 workflow.md §3):
+ *   按住 10 ms 的快点击 **丢 60%** —— X11 后端只记最新状态, 按下+释放
+ *   落在同一个采样窗口里这次点击就整次消失; 能到达的延迟中位数 38 ms。
+ *
+ * 16 ms 把视觉延迟砍一半; 输入采样另外在 gui.cpp 里单独压到 5 ms
+ * (两者绑成一个值时, 采样周期越短越不容易丢点击)。
+ */
+#define LV_DEF_REFR_PERIOD 16
+
 #define LV_USE_X11 1
 #define LV_X11_DIRECT_EXIT   0
 #define LV_X11_DOUBLE_BUFFER 1

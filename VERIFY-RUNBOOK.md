@@ -88,18 +88,19 @@ Stop-Transcript
 | 6 | `✓ 完成: ...\build-armhf`，**且 `$LASTEXITCODE -eq 0`** | 退出码是唯一权威判据 |
 | 7 | `build-armhf\TOOLCHAIN.txt` 与 `deffire-gui-dev` / `deffire-dev` 三个文件都在 | |
 
-参考量级（Linux 侧同一套容器实测，2026-09-15）：
+参考量级（Linux 侧同一套容器实测，2026-09-18）：
 
 ```
-deffire-gui-dev   407936 字节
-deffire-dev         9832 字节
+deffire-gui-dev   约 408 KB   (407936 字节)
+deffire-dev       约 9.8 KB   (9768 字节)
 ```
 
-两个都比接入 libgpiod 之前大（403804 / 5648）：`libgpiod` 是通过 `firecontrol` 静态库
-链进去的，而 `gpio_read_value()` 与 `write_File()` 在同一个 `.cpp` 里，所以**控制台程序
-也连带依赖 `libgpiod.so.2`**（见 workflow.md §2.3）。
+两个都比接入 libgpiod 之前大（约 404 KB / 5.6 KB）：`libgpiod` 是通过 `firecontrol`
+静态库链进去的，而 `gpio_read_value()` 与 `write_File()` 在同一个 `.cpp` 里，所以
+**控制台程序也连带依赖 `libgpiod.so.2`**（见 workflow.md §2.3）。
 
-字节数同量级即正常；**不要**用字节数相等当通过条件。
+字节数**只作量级参考**，每次改代码都会小幅变化；判断成败看的是"文件在不在 + 退出码"，
+**不要**用字节数相等当通过条件。
 
 ### 1.4 失败分支速查
 

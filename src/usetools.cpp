@@ -122,6 +122,4 @@ int gpio_read_value(const char *chip_label, unsigned int line_offset, const char
 
 #endif
 
-
-
 } // namespace useable_tools

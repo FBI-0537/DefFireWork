@@ -92,7 +92,7 @@ Stop-Transcript
 
 ```
 deffire-gui-dev   407936 字节
-deffire-dev         9768 字节
+deffire-dev         9832 字节
 ```
 
 两个都比接入 libgpiod 之前大（403804 / 5648）：`libgpiod` 是通过 `firecontrol` 静态库

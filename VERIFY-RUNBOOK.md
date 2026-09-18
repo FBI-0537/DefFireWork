@@ -91,9 +91,13 @@ Stop-Transcript
 参考量级（Linux 侧同一套容器实测，2026-09-15）：
 
 ```
-deffire-gui-dev   403804 字节
-deffire-dev         5648 字节
+deffire-gui-dev   407936 字节
+deffire-dev         9768 字节
 ```
+
+两个都比接入 libgpiod 之前大（403804 / 5648）：`libgpiod` 是通过 `firecontrol` 静态库
+链进去的，而 `gpio_read_value()` 与 `write_File()` 在同一个 `.cpp` 里，所以**控制台程序
+也连带依赖 `libgpiod.so.2`**（见 workflow.md §2.3）。
 
 字节数同量级即正常；**不要**用字节数相等当通过条件。
 

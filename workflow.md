@@ -80,6 +80,14 @@ CMake 用 `WITH_GPIOD`（默认 AUTO）控制，见 README §5.5。
 3. 板端要装运行时库：`sudo apt install libgpiod2`。**不装整个界面起不来**（不是局部功能失效），
    因为交叉产物链着 `libgpiod.so.2`；`verify-on-board.sh` 会把缺失的库列出来。
 
+**一个副作用（知道就好，暂时不用管）**：`gpio_read_value()` 与 `write_File()` 在同一个
+翻译单元（`usetools.cpp`），链接器为 `write_File` 拉进这个 `.o` 时会把 gpiod 引用一起带上
+—— 于是**连不读 GPIO 的控制台程序 `deffire-dev` 也依赖 `libgpiod.so.2`**
+（产物 5,648 → 9,768 字节）。想去掉这个连带依赖，把 `gpio_read_value()` 挪到自己的
+`.cpp`（如 `src/gpio.cpp`）并登记进 `CMakeLists.txt` 即可，那样只有真正调用它的目标才链
+libgpiod。**现在没做** —— 板子无论如何都要装 `libgpiod2`（GUI 需要），收益只是让控制台
+程序少一个依赖。
+
 `~/下载/` 里那份官方 `main.c` 用的是"综合例程扩展板"的 GPIO 配置（3 个 LED、蜂鸣器走
 `EV_SND`），**和手上这块底板不是一回事** —— 可以看它怎么调 libgpiod，但引脚编号别照抄。
 

@@ -111,6 +111,7 @@ host_arch    = x86_64
 构建工具  cmake / make / ninja-build / pkg-config
 armhf 库  libx11-dev:armhf              ← LVGL 的 X11 显示/输入后端
           libfreetype-dev:armhf         ← 中文字形
+          libgpiod-dev:armhf            ← GPIO 输入读取 (gpio_read_value, v1 API)
 ```
 
 **依赖发现机制**：Debian multiarch 下，armhf 库装在
@@ -125,9 +126,13 @@ include/lib 路径列表 —— 版本永远和 Debian 仓库一致，不会漂�
 
 ## 镜像内自检
 
-`Dockerfile` 在构建阶段就编译一个含 X11 + FreeType 的探针程序，
+`Dockerfile` 在构建阶段就编译一个含 X11 + FreeType + libgpiod 的探针程序，
 并检查产物是 ARM 且带硬浮点 ABI。**自检失败会让 `docker build` 直接失败**，
 不会留下一个"看起来能用实则残缺"的镜像。
+
+探针里刻意调用了 libgpiod 的 **v1** API（`gpiod_chip_open_by_label`）——项目代码用的
+就是 v1。哪天基础镜像升到 libgpiod v2（那些符号被删掉了），**这一步就会失败**，
+而不是等编项目时报一堆"未声明标识符"。
 
 所以：**镜像构建成功 = 工具链可用**。
 
@@ -138,12 +143,12 @@ include/lib 路径列表 —— 版本永远和 Debian 仓库一致，不会漂�
 | 环节 | 结果 |
 |---|---|
 | 环境镜像构建 | ✅ `debian:bookworm-slim` + gcc-arm-linux-gnueabihf 12 + cmake 3.25.1 |
-| 镜像自检 1/2 | ✅ 能交叉编译 X11 + FreeType 的 armhf 程序（ELF32/ARM/hard-float） |
-| 镜像自检 2/2 | ✅ pkg-config 能查到 armhf 的 x11/freetype2 |
-| 容器内 cmake 配置 | ✅ 编译器 `/usr/bin/arm-linux-gnueabihf-g++`，libs `X11;freetype` |
-| 容器内完整编译 | ✅ LVGL 全量 + `deffire-gui-dev` 链接成功 |
-| 产物 | `deffire-gui-dev` **399,624 字节**，ELF32 ARM hard-float，依赖 `libX11`/`libfreetype`/`libgcc_s`/`libc` |
-| `verify-on-board.sh` 检查逻辑 | ✅ 32 位 / ARM / 硬浮点 / 4 个依赖 全部通过 |
+| 镜像自检 1/2 | ✅ 能交叉编译 X11 + FreeType + libgpiod(v1) 的 armhf 程序（ELF32/ARM/hard-float） |
+| 镜像自检 2/2 | ✅ pkg-config 能查到 armhf 的 x11/freetype2/libgpiod（版本 1.6.3） |
+| 容器内 cmake 配置 | ✅ 编译器 `/usr/bin/arm-linux-gnueabihf-g++`，libs `X11;freetype`，GPIO `libgpiod 1.6.3 (v1)` |
+| 容器内完整编译 | ✅ LVGL 全量 + `deffire-gui-dev` / `deffire-dev` 链接成功，318 个编译单元 0 warning |
+| 产物 | `deffire-gui-dev` **407,936 字节**，ELF32 ARM hard-float，依赖 `libX11`/`libfreetype`/`libgpiod`/`libstdc++`/`libgcc_s`/`libc` |
+| `verify-on-board.sh` 检查逻辑 | ✅ 32 位 / ARM / 硬浮点 / 6 个依赖 全部通过 |
 
 网络访问不了 `docker.io` 时，用镜像站即可（已验证可用）：
 

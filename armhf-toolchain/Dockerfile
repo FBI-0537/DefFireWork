@@ -108,10 +108,10 @@ ENV PKG_CONFIG_SYSROOT_DIR=/
 # ---------------------------------------------------------------------------
 # 3) 镜像内自检
 #
-#    构建期就把"能不能交叉编译出带 X11 + freetype 的 armhf 程序"验掉。
+#    构建期就把"能不能交叉编译出带 X11 + freetype + libgpiod 的 armhf 程序"验掉。
 #    自检不过 → 镜像构建失败，不会留一个看似可用实则残缺的环境。
 #
-#    四个坑(构建期逐个抓出来的, 留着注释免得后人重犯):
+#    五个坑(构建期逐个抓出来的, 留着注释免得后人重犯):
 #      a) 用 pkg-config 取 flags, 不要手写 -I/usr/include/freetype2。
 #         pkg-config 会自动带上 freetype2 的 include 路径;
 #         手写的话换 Debian 版本/包布局就可能失效。
@@ -124,32 +124,40 @@ ENV PKG_CONFIG_SYSROOT_DIR=/
 #      d) 这段刻意**不用任何 shell 变量**: Dockerfile 的 RUN 里 `$` 会被构建器
 #         先做变量替换, `$$` 在不同构建器(podman/docker)下行为不一致 ——
 #         实测 podman 把 `$$(cmd)` 变成了 PID 拼接。改成直接管道, 无转义问题。
+#      e) 探针刻意调用 libgpiod 的 **v1** API (gpiod_chip_open_by_label):
+#         项目代码用的就是 v1 (见 src/usetools.cpp)。将来基础镜像升到 v2 时,
+#         这一步会**在镜像构建时就失败**, 而不是等编项目时才报一堆
+#         "未声明标识符" —— 那时更难判断是代码问题还是依赖问题。
 # ---------------------------------------------------------------------------
 RUN set -eux; \
     printf '%s\n' \
       '#include <X11/Xlib.h>' \
       '#include <ft2build.h>' \
       '#include FT_FREETYPE_H' \
+      '#include <gpiod.h>' \
       'int main(void){' \
       '    Display *d = XOpenDisplay(0); (void)d;' \
       '    FT_Library lib; FT_Init_FreeType(&lib);' \
+      '    struct gpiod_chip *c = gpiod_chip_open_by_label("gpiochip0"); (void)c;' \
       '    return 0;' \
       '}' > /tmp/probe.c; \
-    pkg-config --libs x11 freetype2 | grep -q 'arm-linux-gnueabihf' \
+    pkg-config --libs x11 freetype2 libgpiod | grep -q 'arm-linux-gnueabihf' \
         || { echo "FAIL: pkg-config 的库路径不含 arm-linux-gnueabihf —— 可能命中了宿主 x86-64 的 .pc"; exit 1; }; \
     arm-linux-gnueabihf-gcc -O2 /tmp/probe.c -o /tmp/probe \
-        $(pkg-config --cflags --libs x11 freetype2); \
+        $(pkg-config --cflags --libs x11 freetype2 libgpiod); \
     arm-linux-gnueabihf-readelf -h /tmp/probe | grep -E 'Class:|Machine:|Flags:' | sed 's/^/    /'; \
     arm-linux-gnueabihf-readelf -h /tmp/probe | grep -q 'ELF32'          || { echo "FAIL: 不是 32 位 ELF"; exit 1; }; \
     arm-linux-gnueabihf-readelf -h /tmp/probe | grep -q 'Machine:.*ARM'  || { echo "FAIL: 不是 ARM"; exit 1; }; \
     arm-linux-gnueabihf-readelf -h /tmp/probe | grep -q 'hard-float ABI' || { echo "FAIL: 缺硬浮点 ABI"; exit 1; }; \
     rm -f /tmp/probe /tmp/probe.c; \
-    echo "=== 自检 1/2 通过: 能交叉编译 X11 + FreeType 的 armhf 程序 ==="; \
+    echo "=== 自检 1/2 通过: 能交叉编译 X11 + FreeType + libgpiod(v1) 的 armhf 程序 ==="; \
     pkg-config --exists x11       || { echo "FAIL: pkg-config 查不到 x11"; exit 1; }; \
     pkg-config --exists freetype2 || { echo "FAIL: pkg-config 查不到 freetype2"; exit 1; }; \
-    echo "=== 自检 2/2 通过: pkg-config 能查到 armhf 的 x11/freetype2 ==="; \
+    pkg-config --exists libgpiod  || { echo "FAIL: pkg-config 查不到 libgpiod"; exit 1; }; \
+    echo "=== 自检 2/2 通过: pkg-config 能查到 armhf 的 x11/freetype2/libgpiod ==="; \
     echo -n "  x11       : "; pkg-config --modversion x11; \
     echo -n "  freetype2 : "; pkg-config --modversion freetype2; \
+    echo -n "  libgpiod  : "; pkg-config --modversion libgpiod; \
     echo -n "  x11 cflags: "; pkg-config --cflags x11; \
     echo -n "  ft2 cflags: "; pkg-config --cflags freetype2; \
     arm-linux-gnueabihf-gcc --version | head -1

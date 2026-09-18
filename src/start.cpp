@@ -56,12 +56,114 @@ int device_init()
 }
 
 // ---------------------------------------------------------------------------
+// 板载 GPIO 开关量输入 (传感器)
+//
+// 和本文件里 LED / 蜂鸣器的区别: 那些是**输出**(往 sysfs 写), 这里是**输入**
+// (读 GPIO 电平), 走 libgpiod —— 见 useable_tools::gpio_read_value() 与
+// workflow.md §2.3。
+//
+// 接法当"数据"处理: 全写在下面这张表里, 换传感器 / 换引脚只改表, 逻辑不动。
+//
+// ⚠ **引脚必须先上板实测再填。** 现在整张表都是 nullptr(未实测), 读取会明确报
+//   "未实测"并跳过, **不会**拿一个猜出来的引脚去读 —— 那种"读回来是 0"最容易被
+//   当成"没有火警", 是这套东西最危险的失效方式。
+//
+//   板上怎么测 (workflow.md §2.3):
+//       sudo apt install gpiod
+//       gpiodetect      # 有哪些 GPIO 控制器, 它的 label 就是要填的 chip_label
+//       gpioinfo        # 每条线的编号; 顺便看 "used by" —— 已被占用的线读不了
+//   测出来后照着下面三种传感器填 chip_label / line, 再在板上跑控制台程序验证:
+//       cd ~/Desktop && ./deffire-dev        (它会走 cpp_start() → status())
+//
+// ⚠ `参照用代码/main.c`(正点原子官方综合示例)里这三种用的是
+//   **GPIOF:12 / GPIOF:5 / GPIOE:15** —— 那是"综合例程扩展板"的接法,
+//   **不是手上这块底板**。可以照它的写法, 但引脚编号一定要自己实测。
+//
+// ⚠ 电平极性(高电平代表"检测到"还是"没检测到")同样要实测确认, 所以这里只返回
+//   原始电平 0/1, **不做** "1 == 报警" 这种假设。极性搞反会让"有人"显示成"没人",
+//   比读不到更危险。
+//
+// ⚠ 板载 LED / 蜂鸣器的线已经被内核 leds-gpio 驱动占着(它们挂在 /sys/class/leds
+//   下), 那些线用 libgpiod 再 request 会失败 —— 所以它们继续走 sysfs,
+//   不要挪到这张表里来。
+// ---------------------------------------------------------------------------
+namespace {
+
+struct GpioInput {
+    const char *name;        // 传感器名, 打印用
+    const char *chip_label;  // GPIO 控制器的 label (gpiodetect 查); nullptr = 还没实测
+    unsigned int line;       // 该控制器内的线号 (gpioinfo 查)
+    const char *consumer;    // 传给内核的消费者名, gpioinfo 的 "used by" 会显示它
+};
+
+// 三路开关量输入。chip_label = nullptr 表示"还没实测", 读取会明确报错并跳过。
+constexpr GpioInput kGpioInputs[] = {
+    {"人体感应", nullptr, 0, "firecontrol-human"},
+    {"火焰",     nullptr, 0, "firecontrol-flame"},
+    {"光电",     nullptr, 0, "firecontrol-light"},
+};
+
+constexpr int kGpioInputCount =
+    static_cast<int>(sizeof(kGpioInputs) / sizeof(kGpioInputs[0]));
+
+// 读一路传感器。
+// 返回值: 0 成功(电平写进 out_level); -1 失败(引脚未实测 / chip 打不开 / 线被占用)。
+// 失败原因直接打到 stderr —— 读不到就是读不到, 不返回一个"看起来正常"的 0。
+int gpio_input_read(const GpioInput &in, int *out_level)
+{
+    if (out_level == nullptr) {
+        return -1;
+    }
+
+    if (in.chip_label == nullptr) {
+        std::fprintf(stderr,
+                     "传感器【%s】的引脚还没实测: 先在板上跑 gpiodetect / gpioinfo, "
+                     "把 chip_label 和 line 填进 start.cpp 的 kGpioInputs\n",
+                     in.name);
+        return -1;
+    }
+
+    const int level = useable_tools::gpio_read_value(in.chip_label, in.line, in.consumer);
+    if (level < 0) {
+        // 具体原因(chip 打不开 / 线被占用 / 没编入 libgpiod)由 gpio_read_value
+        // 内部逐条报告; 这里补一句"是哪一路", 免得日志里分不清。
+        std::fprintf(stderr, "传感器【%s】读取失败 (%s:%u)\n", in.name, in.chip_label,
+                     in.line);
+        return -1;
+    }
+
+    *out_level = level;
+    return 0;
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
 // 状态采集: 读一次当前状态, 供 gui_build() 和 render() 使用。
 // 将来的周期采集也应该走这里, 保证"状态怎么来的"只有一处。
+//
+// 现在做的是: 把 kGpioInputs 里每一路传感器读一遍并打印出来。
+// 返回值: 0 —— 单路失败不算整体失败(原因逐条打在 stderr); 负数留给将来
+// "整个采集流程都起不来"那种情况。
 // ---------------------------------------------------------------------------
 int status()
 {
-    // TODO: 读传感器, 算出当前火警等级。
+    std::printf("--- 板载开关量输入 (%d 路) ---\n", kGpioInputCount);
+
+    int failed = 0;
+    for (int i = 0; i < kGpioInputCount; i++) {
+        const GpioInput &in = kGpioInputs[i];
+        int level = -1;
+        if (gpio_input_read(in, &level) == 0) {
+            std::printf("  %s (%s:%u) 电平 %d\n", in.name, in.chip_label, in.line, level);
+        } else {
+            failed++;
+        }
+    }
+
+    if (failed > 0) {
+        std::printf("  %d/%d 路没读到 (原因见上面的 stderr)\n", failed, kGpioInputCount);
+    }
 
     return 0;
 }

@@ -163,7 +163,8 @@ sudo apt install libgpiod2
 不想要这个依赖就在构建时 `-DWITH_GPIOD=OFF` 重新交叉编译（README §5.5）。
 
 （顺带：要看 GPIO 接线/占用情况时装上工具 —— `sudo apt install gpiod`，
-里面是 `gpiodetect` / `gpioinfo`。传感器接线确认见 workflow.md §2.3。）
+里面是 `gpiodetect` / `gpioinfo`。传感器接线确认见 workflow.md §2.3。
+注意这两个命令**以 fbi 身份跑会 `Permission denied`**，要先做 §2.3 的权限配置。）
 
 ### 2.3 `[板]` 首次：一次性权限配置
 
@@ -171,13 +172,13 @@ sudo apt install libgpiod2
 sudo bash ~/Desktop/setup-board-permissions.sh fbi
 ```
 
-然后**必须让 leds 组生效**，三选一：
+然后**必须让 leds / gpio 组生效**，三选一：
 
 | 做法 | 何时够用 |
 |---|---|
 | 拔电重启 / `sudo reboot` | 最稳，一次解决 |
 | 注销后重新登录桌面 | 等价，比重启轻 |
-| `newgrp leds` | **只对当前那个 shell 有效**。从桌面会话启动 GUI 时不够 —— 桌面会话的组还是旧的 |
+| `newgrp leds` | **只对当前那个 shell 有效**（`gpio` 组同理）。从桌面会话启动 GUI 时不够 —— 桌面会话的组还是旧的 |
 
 > 注意：脚本自己最后打印的是"重新登录或 `newgrp`"，而 `deploy-to-board.sh` 的提示是 `sudo reboot`。
 > 两者都对，差别只在上面的适用范围。**从 ssh 会话启动 GUI 时，那次 ssh 就是新登录，组已经生效，
@@ -190,7 +191,11 @@ echo 1 > /sys/class/leds/beep/brightness   # 应该响
 echo 0 > /sys/class/leds/beep/brightness   # 停
 ls -l /sys/class/leds/sys-led/brightness /sys/class/leds/sys-led/trigger \
       /sys/class/leds/beep/brightness     /sys/class/leds/beep/trigger
-id -nG                                     # 应含 leds
+id -nG                                     # 应含 leds gpio
+
+# gpio 是**另一个独立的坑**（子系统不同，需要第二条 udev 规则，见 WARNING.md D-9）
+ls -l /dev/gpiochip*                       # 组应是 gpio
+gpiodetect                                 # 应能列出 gpiochipN，不再是 Permission denied
 ```
 
 ---

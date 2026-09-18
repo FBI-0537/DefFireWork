@@ -64,20 +64,21 @@ int device_init()
 //
 // 接法当"数据"处理: 全写在下面这张表里, 换传感器 / 换引脚只改表, 逻辑不动。
 //
-// ⚠ **引脚必须先上板实测再填。** 现在整张表都是 nullptr(未实测), 读取会明确报
-//   "未实测"并跳过, **不会**拿一个猜出来的引脚去读 —— 那种"读回来是 0"最容易被
-//   当成"没有火警", 是这套东西最危险的失效方式。
+// ⚠ **这张表现在是空的, 而且是故意的。** 这块板子上到底接了哪些开关量输入、
+//   接在哪个 GPIO 控制器的哪条线上, 还没确认。**不预置任何"看起来合理"的传感器
+//   名** —— 一个猜出来的名字会让人以为那就是需求, 比空着糟得多。
 //
-//   板上怎么测 (workflow.md §2.3):
+//   怎么填 (板上实测, 见 workflow.md §2.3):
 //       sudo apt install gpiod
 //       gpiodetect      # 有哪些 GPIO 控制器, 它的 label 就是要填的 chip_label
 //       gpioinfo        # 每条线的编号; 顺便看 "used by" —— 已被占用的线读不了
-//   测出来后照着下面三种传感器填 chip_label / line, 再在板上跑控制台程序验证:
-//       cd ~/Desktop && ./deffire-dev        (它会走 cpp_start() → status())
+//   一行填一个, 字段写全, 例如:
+//       {"烟感", "gpiochip0", 12, "firecontrol-smoke"},
+//   填完在板上跑控制台程序验证 (它会走 cpp_start() → status()):
+//       cd ~/Desktop && ./deffire-dev
 //
-// ⚠ `参照用代码/main.c`(正点原子官方综合示例)里这三种用的是
-//   **GPIOF:12 / GPIOF:5 / GPIOE:15** —— 那是"综合例程扩展板"的接法,
-//   **不是手上这块底板**。可以照它的写法, 但引脚编号一定要自己实测。
+// ⚠ 填了名字但 chip_label 还是 nullptr 的行会被明确跳过并报"引脚未实测", 不会拿
+//   一个猜出来的引脚去读 —— 那种"读回来是 0"最容易被当成"没有火警"。
 //
 // ⚠ 电平极性(高电平代表"检测到"还是"没检测到")同样要实测确认, 所以这里只返回
 //   原始电平 0/1, **不做** "1 == 报警" 这种假设。极性搞反会让"有人"显示成"没人",
@@ -96,15 +97,26 @@ struct GpioInput {
     const char *consumer;    // 传给内核的消费者名, gpioinfo 的 "used by" 会显示它
 };
 
-// 三路开关量输入。chip_label = nullptr 表示"还没实测", 读取会明确报错并跳过。
+// 接线表: **填一行读一行**; name == nullptr 的行(占位 / 没填)自动跳过。
+// 现在只留一个占位行 —— 不预置猜出来的传感器, 理由见上面的说明。
 constexpr GpioInput kGpioInputs[] = {
-    {"人体感应", nullptr, 0, "firecontrol-human"},
-    {"火焰",     nullptr, 0, "firecontrol-flame"},
-    {"光电",     nullptr, 0, "firecontrol-light"},
+    {},  // 占位: name == nullptr, 会被跳过
 };
 
-constexpr int kGpioInputCount =
+constexpr int kGpioInputSlots =
     static_cast<int>(sizeof(kGpioInputs) / sizeof(kGpioInputs[0]));
+
+// 表里已经填了几路 (name != nullptr)
+constexpr int countFilledInputs()
+{
+    int n = 0;
+    for (const GpioInput &in : kGpioInputs) {
+        if (in.name != nullptr) {
+            n++;
+        }
+    }
+    return n;
+}
 
 // 读一路传感器。
 // 返回值: 0 成功(电平写进 out_level); -1 失败(引脚未实测 / chip 打不开 / 线被占用)。
@@ -148,11 +160,23 @@ int gpio_input_read(const GpioInput &in, int *out_level)
 // ---------------------------------------------------------------------------
 int status()
 {
-    std::printf("--- 板载开关量输入 (%d 路) ---\n", kGpioInputCount);
+    std::printf("--- 板载开关量输入 ---\n");
+
+    const int filled = countFilledInputs();
+    if (filled == 0) {
+        // 空表不是错误, 是"还没接线 / 还没实测" —— 说清下一步做什么,
+        // 不要假装读过了。
+        std::printf("  还没有确认的接线: 先在板上跑 gpiodetect / gpioinfo,\n");
+        std::printf("  再往 start.cpp 的 kGpioInputs 里一行填一个传感器\n");
+        return 0;
+    }
 
     int failed = 0;
-    for (int i = 0; i < kGpioInputCount; i++) {
+    for (int i = 0; i < kGpioInputSlots; i++) {
         const GpioInput &in = kGpioInputs[i];
+        if (in.name == nullptr) {
+            continue;  // 还没填的行
+        }
         int level = -1;
         if (gpio_input_read(in, &level) == 0) {
             std::printf("  %s (%s:%u) 电平 %d\n", in.name, in.chip_label, in.line, level);
@@ -162,7 +186,7 @@ int status()
     }
 
     if (failed > 0) {
-        std::printf("  %d/%d 路没读到 (原因见上面的 stderr)\n", failed, kGpioInputCount);
+        std::printf("  %d/%d 路没读到 (原因见上面的 stderr)\n", failed, filled);
     }
 
     return 0;

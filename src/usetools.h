@@ -30,8 +30,9 @@ namespace useable_tools
     // 注意: data 是**数据**不是格式串 —— 里面的 % 会原样写进文件。
     int write_File(const char *path, const char *data);
 
-    // 读一条 GPIO 输入线的电平。给接在 GPIO 上的开关量输入用(火焰/人体/光电)——
-    // 板载 LED 与蜂鸣器走 sysfs, 不需要这个。
+    // 读一条 GPIO 输入线的电平。给接在 GPIO 上的开关量输入用 —— 具体接了哪些
+    // 传感器、接在哪条线上, 见 src/start.cpp 的 kGpioInputs(那张表现在是空的,
+    // 要板上实测后再填)。板载 LED 与蜂鸣器走 sysfs, 不需要这个。
     //
     // 返回值: 0 或 1; 失败返回 -1 (与 read_File / write_File 的"负值即失败"一致)。
     //

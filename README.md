@@ -372,7 +372,8 @@ cmake -B build -S . -DWITH_GPIOD=ON      # 必须要有可用的 libgpiod, 否�
 > `gpio_read_value()` 移植到 v2 API。交叉编译/板上不受影响。
 
 板载 LED / 蜂鸣器**不需要** libgpiod（走 `/sys/class/leds/*`）；要它的是接在
-GPIO 上的火焰/人体/光电那类开关量传感器（见第 10 节待办）。
+GPIO 上的开关量输入传感器 —— 接线表在 `src/start.cpp` 的 `kGpioInputs`（现在是空的，
+要上板实测后填，见第 10 节待办）。
 
 ---
 

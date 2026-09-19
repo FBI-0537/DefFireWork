@@ -424,15 +424,15 @@ void onAction(lv_event_t *e)
         outcome = buzzer_onboard_set_heartbeat() == 0 ? "蜂鸣器心跳已开启"
                                                       : "失败 (开发机无此设备)";
         break;
-    // 外部无源蜂鸣器: **只置标志**, 真正的脉冲在主循环里发 (buzzer_set_beep())。
-    // 不能在这里"响一下"就算完 —— 按钮回调返回之后蜂鸣器不会自己保持,
-    // 一次 1 µs 的脉冲听不见东西。
+    // 外部无源蜂鸣器: 这里只是**开/关请求** —— 真正的方波由一个专用线程按固定
+    // 频率发 (见 start.cpp 的 buzzer_out_thread)。不能在这里"响一下"就算完:
+    // 无源蜂鸣器要的是持续方波, 单个脉冲听不见东西。
     case Action::OutBuzzerOn:
-        out_buzzer_status = true;
+        buzzer_out_set(true);
         outcome = "外部无源蜂鸣器已开";
         break;
     case Action::OutBuzzerOff:
-        out_buzzer_status = false;
+        buzzer_out_set(false);
         outcome = "外部无源蜂鸣器已停";
         break;
     case Action::Nothing:
@@ -930,10 +930,8 @@ int main(int argc, char **argv)
     g_start_tick = lv_tick_get();
 
     while (!g_quit) {
-        // 外部无源蜂鸣器: 开关标志在 onAction() 里改, 这里每轮**推进一次方波**
-        // (buzzer_out_tick() 内部按时间翻转 GPIOA:6, 不是"每轮发一个脉冲")。
-        // 关着时它立刻返回, 没有开销; 板上没接这个蜂鸣器时返回 -1, 不影响循环。
-        buzzer_out_tick();
+        // 外部无源蜂鸣器的方波由它自己的线程发, 这里不需要每轮推 —— 主循环
+        // 只管界面(切页 + LVGL 定时器)。
 
         // 切页在这里落地: 事件回调只置标志, 避免在派发点击的过程中删掉底栏
         // (见 g_page_dirty 的说明)。重建完刷新内容区那行小字。

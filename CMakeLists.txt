@@ -53,6 +53,11 @@ target_include_directories(firecontrol PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# start.cpp 的蜂鸣器发声线程用 pthread。glibc 2.34+ 已经把 pthread 并进 libc,
+# 但显式链接才不依赖那个细节(换 libc / 交叉工具链也稳)。
+find_package(Threads REQUIRED)
+target_link_libraries(firecontrol PUBLIC Threads::Threads)
+
 # ---------------------------------------------------------------------------
 # 可执行文件
 # ---------------------------------------------------------------------------

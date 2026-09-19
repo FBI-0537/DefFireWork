@@ -38,15 +38,14 @@ int buzzer_onboard_set_heartbeat();
 int led_onboard_clear_heartbeat();
 int buzzer_onboard_clear_heartbeat();
 
-// 外部无源蜂鸣器 (接在 GPIOA:6) 的开关状态: true = 要响, false = 停。
-// GUI 的按钮回调设置它 (gui.cpp), buzzer_out_tick() 读取它 (start.cpp),
-// 所以必须是全局的、两个文件都看得见 —— 早先写成 main() 里的局部变量,
-// 结果两边都报 not declared。
-extern bool out_buzzer_status;
-
-// 推进外部无源蜂鸣器的方波。**主循环每轮调一次**(不是"响一下") —— 无源蜂鸣器
-// 要的是持续方波, 不是单个脉冲。内部按时间翻转 GPIOA:6 的电平, 是否发声由
-// out_buzzer_status 决定; 关着时什么都不做。详见 start.cpp 里的说明。
-int buzzer_out_tick();
+// 外部无源蜂鸣器 (接在 GPIOA:6) 开 / 关。
+//
+// 实现要点: **发声在专用线程里**按固定频率翻转电平, 不依赖主循环 —— 挂在主循环上
+// 时音调会被循环周期锁死在几百 Hz(板上实测"音调很低")。频率默认 2 kHz, 可用环境变量
+// FIRECONTROL_BUZZER_HZ 覆盖(100..8000), 方便在板上试出这个蜂鸣器最响的音。
+// 返回值: 0 = 请求已接受; -1 = 发声线程起不来(具体原因打印到 stderr)。
+// 注意: 打不开 GPIO 属于**线程内的异步失败**, 会打一行 stderr 并把状态退回"停",
+// 不在这里返回 —— 所以控制台那行才是权威, 界面上显示"已开"只是"请求已发"。
+int buzzer_out_set(bool on);
 
 #endif

@@ -38,4 +38,6 @@ int buzzer_onboard_set_heartbeat();
 int led_onboard_clear_heartbeat();
 int buzzer_onboard_clear_heartbeat();
 
+int buzzer_set_beep();
+
 #endif

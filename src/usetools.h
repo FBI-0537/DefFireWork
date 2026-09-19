@@ -51,6 +51,9 @@ namespace useable_tools
     //     用的是 libgpiod **v1** API (Debian 12 带的是 1.6); v2 已删除这些符号。
     int gpio_read_value(const char *chip_label, unsigned int line_offset,
                         const char *consumer);
+    // 写一条 GPIO 输出线的电平。
+    int gpio_write_value(const char *chip_label, unsigned int line_offset,
+                         const char *consumer, int value);
 }
 
 #endif // FIRECONTROL_USETOOLS_H

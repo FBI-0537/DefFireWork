@@ -301,3 +301,17 @@ int buzzer_onboard_clear_heartbeat()
 {
     return useable_tools::write_File(Buzzer_trigger_Path, "none");
 }
+
+
+// ---------------------------------------------------------------------------
+// 无源蜂鸣器/开与关
+// ---------------------------------------------------------------------------
+
+int buzzer_set_beep()
+{
+    gpio_write_value("GPIOA",6,"buzzer",1);
+    usleep(1);
+    gpio_write_value("GPIOA",6,"buzzer",0);
+    usleep(1);
+    return 0;
+}

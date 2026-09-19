@@ -209,10 +209,17 @@ struct PageSpec {
 };
 
 // 首页: 只留"进调试页"的入口 —— 6 个硬件按钮都挪进各自的调试页, 首页保持干净。
+//
+// 后面那几个 active=false 的是**占位**: 按钮画成暗描边、点了只打印"(占位, 功能待定)",
+// 用来把 2 行 × 3 列排满。有真实功能时把 active 改 true 并绑一个 Action,
+// **别忘了在 onAction() 的 switch 里补 case**(漏了 -Wswitch 会报, 这就是那道防线)。
 constexpr ButtonSpec kHomeButtons[] = {
     {"LED 调试", true, Action::LedSingleSettingPage},
     {"蜂鸣器 调试", true, Action::BuzzerSingleSettingPage},
     {"功能 8", false, Action::Nothing},
+    {"功能 A", false, Action::Nothing},
+    {"功能 B", false, Action::Nothing},
+    {"功能 C", false, Action::Nothing},
 };
 
 // LED 调试页: 单独操作 LED 的开关与心跳, 末位是返回
@@ -702,13 +709,15 @@ void buildUi(int win_w, int win_h)
     g_win_w = win_w;
     g_margin = pct(win_w, 1);
 
-    // 触摸屏上按钮不能太小 (手指触点约 40~50 px): 取屏高 9%, 限制 36..64
-    g_btn_h = pct(win_h, 9);
-    if (g_btn_h < 36) {
-        g_btn_h = 36;
+    // 底栏按钮高度。触摸屏上手指触点约 40~50 px, 原来取屏高 9%(1024x600 上 54 px)
+    // —— 实测**手感偏紧, 不好按**, 所以提到 13%: 同一块屏上是 78 px(高了 44%)。
+    // 上下限挡住极端窗口尺寸: 最小 48(再小就真的难按), 最大 96(再高会把内容区挤没)。
+    g_btn_h = pct(win_h, 13);
+    if (g_btn_h < 48) {
+        g_btn_h = 48;
     }
-    if (g_btn_h > 64) {
-        g_btn_h = 64;
+    if (g_btn_h > 96) {
+        g_btn_h = 96;
     }
 
     const int header_h = pct(win_h, 11);

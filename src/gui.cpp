@@ -651,7 +651,10 @@ int buildFooter(lv_obj_t *scr, int win_w, int btn_h, int margin)
     lv_obj_set_style_pad_row(bar, row_gap, 0);
     // createBar 默认是横向 flex, 这里要竖直排行
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN,
+    // 主轴(main place)用 CENTER, 不是 SPACE_BETWEEN: 首页 2 行时正好排满(无差别),
+    // 而只有 1 行的调试页会在空出来的高度里**垂直居中** —— 按钮不会全挤在分隔线
+    // 下面、底下拖一条空带。代价: 切到调试页时那一行比首页第 1 行低约半行。
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     g_footer_bar = bar;
     return bar_h;

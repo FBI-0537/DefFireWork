@@ -1,6 +1,7 @@
 #include "start.h"
 
 #include <cstdio>
+#include <unistd.h>  // usleep
 
 #include "greeting.h"
 #include "hardware_path.h"
@@ -307,11 +308,17 @@ int buzzer_onboard_clear_heartbeat()
 // 无源蜂鸣器/开与关
 // ---------------------------------------------------------------------------
 
+// 定义 (声明在 start.h): 由 gui.cpp 的按钮回调设置, 这里读取。
+bool out_buzzer_status = false;
+
 int buzzer_set_beep()
 {
-    gpio_write_value("GPIOA",6,"buzzer",1);
-    usleep(1);
-    gpio_write_value("GPIOA",6,"buzzer",0);
-    usleep(1);
+    if (out_buzzer_status)
+    {
+        useable_tools::gpio_write_value("GPIOA", 6, "out_buzzer", 1);
+        usleep(1);
+        useable_tools::gpio_write_value("GPIOA", 6, "out_buzzer", 0);
+        usleep(1);
+    }
     return 0;
 }

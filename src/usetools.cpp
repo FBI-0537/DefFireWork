@@ -1,6 +1,7 @@
 #include "usetools.h"
 
 #include <cstdio>
+#include <new>        // std::nothrow (输出手柄的分配)
 #include <unistd.h>
 
 // libgpiod 是可选的 (CMake 的 WITH_GPIOD, 默认 AUTO): 开发机上没装
@@ -103,52 +104,95 @@ int gpio_read_value(const char *chip_label, unsigned int line_offset, const char
     return value;
 }
 
-int gpio_write_value(const char *chip_label, unsigned int line_offset,
-                     const char *consumer, int value) {
+// ---- GPIO 输出手柄 --------------------------------------------------------
+//
+// 手柄的真身只在本文件定义 (头文件里只有前置声明): 调用方拿不到 gpiod 的类型,
+// 也就不必为了用这个 API 去 include <gpiod.h>。
+struct GpioOutput {
     struct gpiod_chip *chip = nullptr;
     struct gpiod_line *line = nullptr;
+};
 
+GpioOutput *gpio_output_open(const char *chip_label, unsigned int line_offset,
+                             const char *consumer)
+{
     if (chip_label == nullptr || consumer == nullptr) {
-        return -1;
+        return nullptr;
     }
 
-    if (value != 0 && value != 1) {
-        fprintf(stderr, "gpio_write_value: value must be 0 or 1\n");
-        return -1;
+    GpioOutput *out = new (std::nothrow) GpioOutput;
+    if (out == nullptr) {
+        std::fprintf(stderr, "gpio_output_open: 内存不足\n");
+        return nullptr;
     }
 
-    chip = gpiod_chip_open_by_label(chip_label);
-    if (!chip) {
+    out->chip = gpiod_chip_open_by_label(chip_label);
+    if (out->chip == nullptr) {
         perror("gpiod_chip_open_by_label");
-        return -1;
+        delete out;
+        return nullptr;
     }
 
-    line = gpiod_chip_get_line(chip, line_offset);
-    if (!line) {
+    out->line = gpiod_chip_get_line(out->chip, line_offset);
+    if (out->line == nullptr) {
         perror("gpiod_chip_get_line");
-        gpiod_chip_close(chip);
-        return -1;
+        gpiod_chip_close(out->chip);
+        delete out;
+        return nullptr;
     }
 
-    // 请求为输出，先给一个默认值 0
-    if (gpiod_line_request_output(line, consumer, 0) < 0) {
+    // 请求为输出, 初值 0 (不响)
+    if (gpiod_line_request_output(out->line, consumer, 0) < 0) {
         perror("gpiod_line_request_output");
-        gpiod_chip_close(chip);   // 未成功 request，不要 release
-        return -1;
+        gpiod_chip_close(out->chip);   // 未成功 request, 不要 release
+        delete out;
+        return nullptr;
     }
 
-    // 写入指定电平
-    if (gpiod_line_set_value(line, value) < 0) {
+    return out;
+}
+
+int gpio_output_set(GpioOutput *out, int value)
+{
+    if (out == nullptr || out->line == nullptr) {
+        return -1;
+    }
+    if (value != 0 && value != 1) {
+        std::fprintf(stderr, "gpio_output_set: value 只能是 0 或 1\n");
+        return -1;
+    }
+    if (gpiod_line_set_value(out->line, value) < 0) {
         perror("gpiod_line_set_value");
-        gpiod_line_release(line);
-        gpiod_chip_close(chip);
         return -1;
     }
-
-    gpiod_line_release(line);
-    gpiod_chip_close(chip);
-
     return 0;
+}
+
+void gpio_output_close(GpioOutput *out)
+{
+    if (out == nullptr) {
+        return;
+    }
+    if (out->line != nullptr) {
+        gpiod_line_release(out->line);
+    }
+    if (out->chip != nullptr) {
+        gpiod_chip_close(out->chip);
+    }
+    delete out;
+}
+
+// 一次性写: 建在手柄 API 之上, 逻辑只有一份。
+int gpio_write_value(const char *chip_label, unsigned int line_offset,
+                     const char *consumer, int value)
+{
+    GpioOutput *out = gpio_output_open(chip_label, line_offset, consumer);
+    if (out == nullptr) {
+        return -1;
+    }
+    const int rc = gpio_output_set(out, value);
+    gpio_output_close(out);
+    return rc;
 }
 
 #else  // 没编入 libgpiod: 保留同名函数, 但显式失败 —— 不静默返回"低电平"
@@ -185,6 +229,37 @@ int gpio_write_value(const char *chip_label, unsigned int line_offset,
                      "—— 返回 -1。装上 libgpiod-devel 后重新配置即可。\n");
     }
     return -1;
+}
+
+struct GpioOutput {};  // 没编入 libgpiod: 空壳类型, 只为满足头文件里的声明
+
+GpioOutput *gpio_output_open(const char *chip_label, unsigned int line_offset,
+                             const char *consumer)
+{
+    (void)chip_label;
+    (void)line_offset;
+    (void)consumer;
+
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        std::fprintf(stderr,
+                     "gpio_output_open: 本产物没有编入 libgpiod 支持 (CMake 的 WITH_GPIOD) "
+                     "—— 返回 nullptr。装上 libgpiod-devel 后重新配置即可。\n");
+    }
+    return nullptr;
+}
+
+int gpio_output_set(GpioOutput *out, int value)
+{
+    (void)out;
+    (void)value;
+    return -1;
+}
+
+void gpio_output_close(GpioOutput *out)
+{
+    (void)out;
 }
 
 #endif

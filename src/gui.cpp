@@ -930,10 +930,10 @@ int main(int argc, char **argv)
     g_start_tick = lv_tick_get();
 
     while (!g_quit) {
-        // 外部无源蜂鸣器: 开关标志在 onAction() 里改, 这里每轮发一次脉冲。
-        // buzzer_set_beep() 自己读 out_buzzer_status —— 关着就立刻返回, 没开销;
-        // 板上没接这个蜂鸣器时它会返回 -1, 不影响循环。
-        buzzer_set_beep();
+        // 外部无源蜂鸣器: 开关标志在 onAction() 里改, 这里每轮**推进一次方波**
+        // (buzzer_out_tick() 内部按时间翻转 GPIOA:6, 不是"每轮发一个脉冲")。
+        // 关着时它立刻返回, 没有开销; 板上没接这个蜂鸣器时返回 -1, 不影响循环。
+        buzzer_out_tick();
 
         // 切页在这里落地: 事件回调只置标志, 避免在派发点击的过程中删掉底栏
         // (见 g_page_dirty 的说明)。重建完刷新内容区那行小字。

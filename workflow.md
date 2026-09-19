@@ -20,7 +20,7 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | Linux 交叉编译（`build-armhf.sh`） | ✅ 实测通过 | 0 警告；同源同镜像重建产物 sha256 逐字节一致（可复现） |
-| Windows 交叉编译（`build-armhf.ps1`） | ❌ **从未执行过** | 开发机没有 `pwsh`；步骤见 runbook §1 |
+| Windows 交叉编译（`build-armhf.ps1`） | ✅ 已跑通 | FBI-0537 在 Windows 上实跑（2026-09-19，PR #8）：`-Wall -Wextra` 零警告，产物 407948 / 9788 字节。**待办 #2 达成**（此前只改过、从没执行过） |
 | 板上实测（LVGL 版） | ❌ **还没做** | README §10、WARNING A-1；逐项判据见 runbook §3–§4 |
 | 原生 GUI（开发机预览） | ✅ 三页正常 | 首页 / LED 调试页 / 蜂鸣器调试页：切页、按钮派发、退出路径都实测过 |
 | GPIO 输入（libgpiod） | ⚠ 只有骨架 | 依赖链已配齐并交叉编译通过；**没有任何调用点**，板端也没验过（不知道传感器接在哪个 gpiochip / 哪条线上） |
@@ -100,6 +100,27 @@ GPIOD / GPIOE / GPIOG: 全部被占用
 
 板端还要有运行时库：`sudo apt install libgpiod2`。**不装整个界面起不来**（不是局部功能失效），
 因为交叉产物链着 `libgpiod.so.2`；`verify-on-board.sh` 会把缺失的库列出来。
+
+### 2.4 GPIO **输出**（外部无源蜂鸣器，2026-09-19 随 PR #8 加的）
+
+板上 PA6（= **GPIOA line 6**，实测空闲）接了一个**无源**蜂鸣器模块，首页有入口、
+独立调试页是 开 / 关 / 返回（**没有"心跳"** —— 它不归内核 leds-gpio 管，没有 `trigger` 文件）。
+
+写 GPIO 有两条路，**别用错**：
+
+| 用途 | 用什么 |
+|---|---|
+| 偶尔写一次电平 | `useable_tools::gpio_write_value()` —— 内部走一整轮 open/request/release/close |
+| **反复翻转**（方波、PWM 模拟） | `useable_tools::gpio_output_open()` 拿手柄，循环里只 `gpio_output_set()`，用完 `gpio_output_close()` |
+
+**教训（PR #8 里出现过的写法）**：每个脉冲都调 `gpio_write_value()`，而主循环每轮跑一次
+（~900 次/秒）⇒ ~1800 次/秒的芯片开关，板上单核会被拖慢；而且脉冲之间线是**放开**的，
+引脚没有持续驱动 —— 现象就是"一连串咔哒声，不是音调"。无源蜂鸣器要的是**持续方波**，
+现在 `buzzer_out_tick()` 按时间翻转（半周期 1 ms ≈ 500 Hz），受主循环周期限制，音调上不去；
+想要更高/更准的音调得走**内核 PWM**（`/sys/class/pwm`，零 CPU 占用），需要 PA6 复用成
+PWM 通道 + 上板验证。
+
+**还没实测**：板上那个蜂鸣器还没实际响过（`gpioinfo` 只说明 PA6 空闲，不等于接对了线）。
 
 **一个副作用（知道就好，暂时不用管）**：`gpio_read_value()` 与 `write_File()` 在同一个
 翻译单元（`usetools.cpp`），链接器为 `write_File` 拉进这个 `.o` 时会把 gpiod 引用一起带上

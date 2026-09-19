@@ -57,9 +57,27 @@ namespace useable_tools
     //     用的是 libgpiod **v1** API (Debian 12 带的是 1.6); v2 已删除这些符号。
     int gpio_read_value(const char *chip_label, unsigned int line_offset,
                         const char *consumer);
-    // 写一条 GPIO 输出线的电平。
+    // 写一条 GPIO 输出线的电平 (**一次性**)。
+    //
+    // ⚠ **需要反复翻转时别用这个** —— 它内部要 open chip / request output /
+    //    release / close 走一整轮, 放循环里会变成每秒上千次芯片开关。
+    //    那种场景请用下面的手柄 API: 开一次, 之后只 set。
     int gpio_write_value(const char *chip_label, unsigned int line_offset,
                          const char *consumer, int value);
+
+    // ---- GPIO 输出手柄: 开一次, 之后只写值 ----------------------------------
+    //
+    // 用于需要**反复翻转**的场合 (例如驱动无源蜂鸣器出方波): open 拿手柄,
+    // 循环里只调 gpio_output_set(), 不再重复开关芯片。
+    //
+    // 返回值: 手柄; nullptr = 失败(具体原因内部已 perror / 打印)。
+    // 用完必须 gpio_output_close(); 没编入 libgpiod 时 open 直接返回 nullptr
+    // (调用方按失败处理即可, 不需要 #ifdef)。
+    struct GpioOutput;
+    GpioOutput *gpio_output_open(const char *chip_label, unsigned int line_offset,
+                                 const char *consumer);
+    int gpio_output_set(GpioOutput *out, int value);
+    void gpio_output_close(GpioOutput *out);
 }
 
 #endif // FIRECONTROL_USETOOLS_H

@@ -1,7 +1,8 @@
 #include "start.h"
 
+#include <cstdint>  // uint64_t
 #include <cstdio>
-#include <unistd.h>  // usleep
+#include <time.h>  // clock_gettime (推进蜂鸣器方波用)
 
 #include "greeting.h"
 #include "hardware_path.h"
@@ -305,20 +306,84 @@ int buzzer_onboard_clear_heartbeat()
 
 
 // ---------------------------------------------------------------------------
-// 无源蜂鸣器/开与关
+// 外部无源蜂鸣器 (接在 GPIOA:6)
+//
+// **无源**蜂鸣器要的是持续方波, 不是"发一个脉冲" —— 这是这一段的全部要点:
+//
+//   1. 输出线**只 request 一次** (gpio_output_open 拿手柄), 之后每轮只
+//      gpio_output_set()。早期写法是每个脉冲都 open/request/release/close,
+//      而主循环每轮调一次(~900 次/秒) => ~1800 次/秒的芯片开关, 板上单核会被
+//      拖慢; 更要命的是脉冲之间线是放开的, 引脚没有持续驱动 —— 现象就是
+//      "一连串咔哒声, 不是音调"。
+//   2. 主循环每轮调一次本函数, 每轮最多翻转一次电平 => 音调 ≈ 1/(2×循环周期)。
+//      循环周期约 1 ms, 所以半周期取 1 ms(≈500 Hz)。
+//      想要更高/更准的音调得走内核 PWM (/sys/class/pwm, 零 CPU 占用), 但那需要
+//      把 PA6 复用成 PWM 通道并上板验证 —— 见 workflow.md §2.3。
+//
+// 关着的时候什么都不做(只在从"响"切到"停"那一次写低电平), 所以空闲开销为 0。
 // ---------------------------------------------------------------------------
 
 // 定义 (声明在 start.h): 由 gui.cpp 的按钮回调设置, 这里读取。
 bool out_buzzer_status = false;
 
-int buzzer_set_beep()
+namespace {
+
+// 半周期 1 ms -> 约 500 Hz。见上面第 2 条: 受主循环周期限制, 不可能更高。
+constexpr uint64_t kOutBuzzerHalfPeriodUs = 1000;
+
+constexpr const char *kOutBuzzerChip = "GPIOA";
+constexpr unsigned int kOutBuzzerLine = 6;
+constexpr const char *kOutBuzzerConsumer = "out_buzzer";
+
+useable_tools::GpioOutput *g_out_buzzer = nullptr;
+bool g_out_buzzer_open_failed = false;  // 开过又失败就别每轮重试(会刷屏)
+bool g_out_buzzer_level = false;        // 当前电平: 只在变化时写
+uint64_t g_out_buzzer_last_us = 0;      // 上次翻转的时刻
+
+uint64_t monotonic_us()
 {
-    if (out_buzzer_status)
-    {
-        useable_tools::gpio_write_value("GPIOA", 6, "out_buzzer", 1);
-        usleep(1);
-        useable_tools::gpio_write_value("GPIOA", 6, "out_buzzer", 0);
-        usleep(1);
+    struct timespec ts {};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000ull +
+           static_cast<uint64_t>(ts.tv_nsec) / 1000ull;
+}
+
+}  // namespace
+
+int buzzer_out_tick()
+{
+    if (!out_buzzer_status) {
+        // 停: 只在"之前还在响"时写一次低电平, 之后每轮立刻返回
+        if (g_out_buzzer_level) {
+            if (g_out_buzzer != nullptr) {
+                useable_tools::gpio_output_set(g_out_buzzer, 0);
+            }
+            g_out_buzzer_level = false;
+        }
+        return 0;
+    }
+
+    // 第一次要响时才开线 —— 懒开, 免得没接蜂鸣器时启动就报错
+    if (g_out_buzzer == nullptr) {
+        if (g_out_buzzer_open_failed) {
+            return -1;
+        }
+        g_out_buzzer = useable_tools::gpio_output_open(kOutBuzzerChip, kOutBuzzerLine,
+                                                       kOutBuzzerConsumer);
+        if (g_out_buzzer == nullptr) {
+            g_out_buzzer_open_failed = true;
+            std::fprintf(stderr, "外部无源蜂鸣器: 打不开 %s:%u (原因见上面的 perror)\n",
+                         kOutBuzzerChip, kOutBuzzerLine);
+            return -1;
+        }
+        g_out_buzzer_last_us = monotonic_us();
+    }
+
+    const uint64_t now = monotonic_us();
+    if (now - g_out_buzzer_last_us >= kOutBuzzerHalfPeriodUs) {
+        g_out_buzzer_last_us = now;
+        g_out_buzzer_level = !g_out_buzzer_level;
+        useable_tools::gpio_output_set(g_out_buzzer, g_out_buzzer_level ? 1 : 0);
     }
     return 0;
 }

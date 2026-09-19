@@ -120,13 +120,21 @@ c_ok "    ✓ 已传输到 ~/$REMOTE_DIR/"
 #
 # 这是首次部署最容易卡住的地方: /sys/class/leds/*/brightness 默认 root:root,
 # 普通用户只读, 于是界面点了没反应, 而 sudo 手敲却有效 —— 很难查。
-# 这里以目标用户身份直接试写权限, 省得在界面上排查。
+# /dev/gpiochip* 是另一处独立的权限门槛 (子系统是 gpio 不是 leds, 见 WARNING.md D-9)。
+# 这里以目标用户身份直接试权限, 省得在界面上排查。
 # ---------------------------------------------------------------------------
-c_info "=== 检查 LED / 蜂鸣器写入权限 ==="
+c_info "=== 检查 LED / 蜂鸣器 与 GPIO 权限 ==="
 PERM_PROBE='for f in /sys/class/leds/beep/brightness /sys/class/leds/beep/trigger \
     /sys/class/leds/sys-led/brightness /sys/class/leds/sys-led/trigger; do
         if [ -w "$f" ]; then echo "OK   $f"; else echo "DENY $f"; fi
-    done'
+    done
+    found=0
+    for d in /dev/gpiochip*; do
+        [ -e "$d" ] || continue
+        found=1
+        if [ -w "$d" ]; then echo "OK   $d"; else echo "DENY $d"; fi
+    done
+    if [ "$found" -eq 0 ]; then echo "NONE /dev/gpiochip* (本内核没暴露 GPIO 字符设备)"; fi'
 
 set +e
 PERM_OUT="$(ssh "${SSH_OPTS[@]}" "$TARGET" "$PERM_PROBE" 2>/dev/null)"
@@ -138,15 +146,25 @@ else
     printf '%s\n' "$PERM_OUT" | sed 's/^/    /'
 fi
 
-if printf '%s' "$PERM_OUT" | grep -q '^DENY'; then
+# 分开统计: LED 的权限问题会让按钮"看起来坏了", gpio 的不会 —— 提示词不能混。
+DENY_LED="$(printf '%s\n' "$PERM_OUT" | grep '^DENY /sys/' || true)"
+DENY_GPIO="$(printf '%s\n' "$PERM_OUT" | grep '^DENY /dev/' || true)"
+
+if [ -n "$DENY_LED" ] || [ -n "$DENY_GPIO" ]; then
     echo
-    c_warn "⚠ 有设备文件当前用户不可写 —— 界面里点 LED / 蜂鸣器按钮不会有反应。"
+    if [ -n "$DENY_LED" ]; then
+        c_warn "⚠ LED / 蜂鸣器设备文件当前用户不可写 —— 界面里点那些按钮不会有反应。"
+    fi
+    if [ -n "$DENY_GPIO" ]; then
+        c_warn "⚠ /dev/gpiochip* 当前用户打不开 —— gpiodetect / gpioinfo 会 Permission denied。"
+        c_warn "  (这一项**不影响** LED / 蜂鸣器按钮, 它俩走 sysfs; 影响的是将来的传感器模块)"
+    fi
     c_warn "  在板子上执行一次 (只需一次, 重启后仍生效):"
     echo
     echo "      sudo bash ~/$REMOTE_DIR/setup-board-permissions.sh $(printf '%s' "$TARGET" | cut -d@ -f1)"
     echo "      sudo reboot"
     echo
-    c_warn "  原因与验证见 WARNING.md 的「sysfs 权限」一节。"
+    c_warn "  原因与验证见 WARNING.md 的 D-8 (LED) 与 D-9 (GPIO) 两节。"
 else
     c_ok "    ✓ 权限正常"
 fi

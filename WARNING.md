@@ -536,6 +536,67 @@ sudo udevadm control --reload-rules && sudo reboot
 界面上看不出是权限问题。`deploy-to-board.sh` 现在会在传输后主动探测这四个文件
 对目标用户是否可写，不可写就直接提示要跑权限脚本。
 
+### D-9. 普通用户打不开 `/dev/gpiochip*`
+
+**症状**：板上按 D-8 修好 LED 权限之后，gpio 相关的命令**照样**是权限错误：
+
+```bash
+fbi@stm32mp135:~$ sudo apt install libgpiod2 gpiod
+fbi@stm32mp135:~$ gpiodetect
+gpiodetect: unable to access GPIO chips: Permission denied
+fbi@stm32mp135:~$ gpioinfo | head -40
+gpioinfo: error accessing GPIO chips: Permission denied
+```
+
+`sudo gpiodetect` 就正常 —— 说明装包没问题，纯粹是权限。
+
+**原因**：`/dev/gpiochipN` 是 devtmpfs 里的**字符设备**，默认 `root:root`
+且不给组/其他用户读写（通常是 `0600`，用 `ls -l /dev/gpiochip*` 看实际值）。
+普通用户连 `open()` 都过不去，所以 `gpiod_chip_open_by_label()` 一样失败。
+
+**和 D-8 是两个独立的坑**，排查时别混：
+
+| | D-8 LED / 蜂鸣器 | D-9 GPIO |
+|---|---|---|
+| 对象 | `/sys/class/leds/*/brightness` | `/dev/gpiochipN` |
+| 类型 | sysfs 属性文件 | devtmpfs 字符设备 |
+| 子系统 | `leds` | `gpio` |
+| 默认权限 | `root:root 0644` | `root:root 0600` |
+| 失败表现 | 静默返回 -1，按钮"没反应" | 明确 `Permission denied` |
+| 命中范围 | 只有 LED | `gpiodetect` / `gpioinfo` / libgpiod |
+
+因为子系统不同，D-8 那条 `SUBSYSTEM=="leds"` 规则**碰不到** `/dev/gpiochip*`，
+必须再加一条。
+
+**Debian 不管这件事**：bookworm 的 `libgpiod2`（`1.6.3-1`，就是板上这个版本）
+既不创建 `gpio` 组也不装 udev 规则。[Debian bug #1055231](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1055231)
+正是要求补一个 `gpio` 组，2025-07 以"1.5 年无响应"关闭，**没有修复**。
+所以只能自己上规则。
+
+**修复**：`setup-board-permissions.sh` 现在一次处理两者 —— 除了 `leds` 组，还建
+`gpio` 组并写第二条规则：
+
+```
+# /etc/udev/rules.d/90-gpio.rules
+SUBSYSTEM=="gpio", KERNEL=="gpiochip*", ACTION=="add", RUN+="/bin/chgrp gpio /dev/%k", RUN+="/bin/chmod g=u /dev/%k"
+```
+
+`KERNEL=="gpiochip*"` 把范围限死在字符设备，不会误伤老式 sysfs GPIO
+接口（`/sys/class/gpio/export` 等）。
+
+**为什么要脚本自己核对结果**：规则没命中时 udev **不报任何错**，脚本会"看起来
+跑完了其实没用"。所以它跑完会检查每个 `/dev/gpiochip*` 的组是否真的变成了 `gpio`，
+没变就提示去确认子系统名：
+
+```bash
+udevadm info -q property /dev/gpiochip0 | grep SUBSYSTEM   # 应当输出 gpio
+```
+
+**这个坑目前不挡任何功能**：LED / 蜂鸣器走的是 D-8 那条 sysfs 路线，完全不碰
+gpiochip。`gpio_read_value()` 虽然被链进产物（连 `libgpiod.so.2` 一起带进来），
+但**当前没有任何调用点** —— 详见 [workflow.md](workflow.md) §2.3。等真正开始写
+传感器模块时，这条权限才会用上；提前配好没有副作用。
+
 ---
 
 ## E. 未遇到但值得警惕的

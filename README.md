@@ -234,7 +234,8 @@ ctest --test-dir build --output-on-failure
 
 必须显式给 `用户@IP`：开发机上通常解析不了板子的短主机名。板子的普通用户是 `fbi`。
 
-**首次部署还要在板上做一次权限配置**（否则界面里点 LED / 蜂鸣器没反应）：
+**首次部署还要在板上做一次权限配置**（否则界面里点 LED / 蜂鸣器没反应，
+`gpiodetect` 之类也会 `Permission denied`）：
 
 ```bash
 ssh fbi@<板子IP>
@@ -242,8 +243,10 @@ sudo bash ~/Desktop/setup-board-permissions.sh fbi
 sudo reboot
 ```
 
-原因见 [WARNING.md](WARNING.md) 的「sysfs 权限」一节 —— `/sys/class/leds/*/brightness`
-默认是 root 只写，普通用户写的失败被静默吞掉了。
+原因见 [WARNING.md](WARNING.md) 的 D-8 / D-9 两节 —— 这是**两个独立的坑**：
+`/sys/class/leds/*/brightness` 默认是 root 只写，普通用户写的失败被**静默吞掉**；
+`/dev/gpiochip*` 默认是 root 独占的字符设备，普通用户**明确报 `Permission denied`**。
+两者子系统不同（`leds` / `gpio`），需要两条 udev 规则。
 
 ### 5.4 GUI 交互
 

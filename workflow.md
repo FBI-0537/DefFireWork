@@ -69,16 +69,37 @@ CMake 用 `WITH_GPIOD`（默认 AUTO）控制，见 README §5.5。
 所以原生 Fedora 构建拿不到这个功能（CMake 会认出版本不符并明确跳过，不会拿一堆
 "未声明标识符"糊你一脸）。要在原生环境用它，得先把 `gpio_read_value()` 移植到 v2。
 
-**动手前必须先确认（现在全是未知）**：
+**板上实测（2026-09-19，D-9 修好权限之后，`gpiodetect` / `gpioinfo` 不再 Permission denied）**：
 
-1. **传感器到底接在哪个 gpiochip、哪几条线上？** 板上 `sudo apt install gpiod` 后用
-   `gpiodetect` / `gpioinfo` 查。
-2. **那些线是不是已经被内核占用了？** `gpioinfo` 里看 "used by"。
-   板载 LED / 蜂鸣器已经归 `leds-gpio` 驱动持有，再 `request` 会失败（EBUSY）——
-   这也是为什么它们**必须**继续走 sysfs，而不是 libgpiod。
-   ⚠ 这条是推断，按"不要凭推断断定硬件行为"的规矩：**上板用 `gpioinfo` 实测确认**。
-3. 板端要装运行时库：`sudo apt install libgpiod2`。**不装整个界面起不来**（不是局部功能失效），
-   因为交叉产物链着 `libgpiod.so.2`；`verify-on-board.sh` 会把缺失的库列出来。
+控制器 9 个。`chip_label` 就是 `gpiodetect` **方括号里**那个 —— **`GPIOA` … `GPIOI`**：
+
+| gpiochip | label | 线数 | 备注（实测快照） |
+|---|---|---|---|
+| 0 / 1 / 2 / 3 | GPIOA / GPIOB / GPIOC / GPIOD | 16 | 绝大多数线被内核占用 |
+| **5** | **GPIOF** | 16 | **line 8 = `"beep"`（蜂鸣器）**；line 14 = `"USER-KEY1"`（板上按键） |
+| 6 / 7 | GPIOG / GPIOH | 16 / 15 | GPIOH line 5 = `"reset"` |
+| **8** | **GPIOI** | 8 | **line 3 = `"sys-led"`（LED）**；0 = `irq`、1 = `spi0 CS0`、2 = `reset` |
+
+⚠ **别把 `gpiochip0` 当 label 填。** 那是**设备名**（`gpiod_chip_open_by_name()` 用的那个），
+而 `gpio_read_value()` 走的是 `gpiod_chip_open_by_label()` —— 填 `gpiochip0` 会找不到芯片。
+
+**"LED / 蜂鸣器的引脚归内核持有"现在是实测结论，不是推断了**：`gpioinfo` 里那两条线的
+consumer 就是 `"sys-led"` / `"beep"`，状态 `[used]`。所以它们**必须**继续走 sysfs，
+用 libgpiod 去 request 会失败（EBUSY）。两者 DT 极性都是 **active-low**，但这不影响我们
+写 sysfs（`brightness=1` 就是"亮 / 响"）。
+
+**传感器接在哪条线上，仍是硬件事实 —— `gpioinfo` 给不了。** 它只能告诉你"哪些线空闲"，
+而"空闲"不等于"接了什么"。所以 `src/start.cpp` 的接线表保持空白，等接线确认后一行填一行。
+下面是当天的空闲线快照（仅供对照，**别拿它当接线依据**）：
+
+```
+GPIOA: 6, 11, 13(output), 14      GPIOB: 10          GPIOC: 14, 15
+GPIOF: 15                         GPIOH: 0, 1, 4(output)      GPIOI: 4, 5, 6, 7
+GPIOD / GPIOE / GPIOG: 全部被占用
+```
+
+板端还要有运行时库：`sudo apt install libgpiod2`。**不装整个界面起不来**（不是局部功能失效），
+因为交叉产物链着 `libgpiod.so.2`；`verify-on-board.sh` 会把缺失的库列出来。
 
 **一个副作用（知道就好，暂时不用管）**：`gpio_read_value()` 与 `write_File()` 在同一个
 翻译单元（`usetools.cpp`），链接器为 `write_File` 拉进这个 `.o` 时会把 gpiod 引用一起带上

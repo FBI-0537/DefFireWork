@@ -68,12 +68,12 @@ int device_init()
 //   接在哪个 GPIO 控制器的哪条线上, 还没确认。**不预置任何"看起来合理"的传感器
 //   名** —— 一个猜出来的名字会让人以为那就是需求, 比空着糟得多。
 //
-//   怎么填 (板上实测, 见 workflow.md §2.3):
+//   怎么填 (板上实测, 见 workflow.md §2.3 — 那里有 2026-09-19 的线上表):
 //       sudo apt install gpiod
-//       gpiodetect      # 有哪些 GPIO 控制器, 它的 label 就是要填的 chip_label
-//       gpioinfo        # 每条线的编号; 顺便看 "used by" —— 已被占用的线读不了
+//       gpiodetect      # 有哪些控制器; **方括号里那个才是 chip_label** (如 GPIOA)
+//       gpioinfo        # 每条线的编号; consumer 列是"谁占着", unused 才是空闲
 //   一行填一个, 字段写全, 例如:
-//       {"烟感", "gpiochip0", 12, "firecontrol-smoke"},
+//       {"烟感", "GPIOA", 12, "firecontrol-smoke"},   // 填 label, 不是 "gpiochip0"
 //   填完在板上跑控制台程序验证 (它会走 cpp_start() → status()):
 //       cd ~/Desktop && ./deffire-dev
 //
@@ -84,9 +84,9 @@ int device_init()
 //   原始电平 0/1, **不做** "1 == 报警" 这种假设。极性搞反会让"有人"显示成"没人",
 //   比读不到更危险。
 //
-// ⚠ 板载 LED / 蜂鸣器的线已经被内核 leds-gpio 驱动占着(它们挂在 /sys/class/leds
-//   下), 那些线用 libgpiod 再 request 会失败 —— 所以它们继续走 sysfs,
-//   不要挪到这张表里来。
+// ⚠ 板载 LED / 蜂鸣器的线已经归内核 leds-gpio 驱动持有 —— 板上实测:
+//   sys-led = GPIOI:3、beep = GPIOF:8, `gpioinfo` 里 consumer 就是这两个名字、
+//   状态 [used]。所以这里再 request 会失败(EBUSY), 它们继续走 sysfs, 别挪进这张表。
 // ---------------------------------------------------------------------------
 namespace {
 

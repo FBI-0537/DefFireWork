@@ -21,6 +21,20 @@ inline constexpr const char *Led_on_board_Path = "/sys/class/leds/sys-led/bright
 inline constexpr const char *Buzzer_on_board_Path = "/sys/class/leds/beep/brightness";
 
 // ---------------------------------------------------------------------------
+// 这两条线在 GPIO 侧的位置（2026-09-19 板上 `gpioinfo` 实测, 只是备忘, 代码不碰）
+//
+//     sys-led : gpiochip8 [GPIOI] line 3   consumer "sys-led"   output active-low [used]
+//     beep    : gpiochip5 [GPIOF] line 8   consumer "beep"      output active-low [used]
+//
+// 关键点: **两条线都被内核驱动占着**（`[used]`）, 所以不能用 libgpiod 去 request
+// （会 EBUSY）—— 这就是本文件存在的理由: 走 sysfs 的 brightness / trigger。
+//
+// 极性: DT 里两条都是 active-low。**但这不影响我们写 sysfs** —— 内核 LED 框架
+// 已经把极性算进去了, `brightness` 写 1 就是"亮 / 响"。只有绕过 LED 框架、
+// 直接驱动 GPIO 时才需要自己反相(那时才轮到 sys-led/invert 或写 0)。
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // trigger 文件 —— 和 brightness 是两个独立的 sysfs 属性
 //
 // 内核 LED 框架里, brightness 是"亮度值", trigger 是"由谁来控制亮度":

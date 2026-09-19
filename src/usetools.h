@@ -37,12 +37,18 @@ namespace useable_tools
     // 返回值: 0 或 1; 失败返回 -1 (与 read_File / write_File 的"负值即失败"一致)。
     //
     // 参数:
-    //     chip_label  —— **GPIO 控制器**的 label, 例如 "gpiochip0" / "GPIOA"。
-    //                    不是 "sys-led" / "beep" 这种设备名: 那些是内核 LED 框架
-    //                    注册的设备, 引脚已经归驱动持有, 这里再 request 会失败
-    //                    (EBUSY)。label 用 `gpiodetect` 查。
+    //     chip_label  —— **GPIO 控制器的 label**, 不是设备名。这块板子上是
+    //                    "GPIOA" … "GPIOI" —— 即 `gpiodetect` 输出里方括号中的那个
+    //                    (`gpiochip0 [GPIOA] (16 lines)`)。
+    //                    ⚠ 不要填 "gpiochip0": 那是**设备名**(name), 对应
+    //                      gpiod_chip_open_by_name(); 这里走的是
+    //                      gpiod_chip_open_by_label(), 填设备名会找不到芯片。
+    //                    ⚠ 也不是 "sys-led" / "beep": 那些是内核 LED 框架注册的
+    //                      设备, 引脚已经被驱动持有(板上实测 sys-led = GPIOI:3,
+    //                      beep = GPIOF:8, `gpioinfo` 里状态都是 [used]),
+    //                      在这里再 request 会失败(EBUSY)。
     //     line_offset —— 该控制器内的线号, 即 `gpioinfo` 里的 line 编号。
-    //     consumer    —— 传给内核的消费者名字; 排查时 `gpioinfo` 的 "used by"
+    //     consumer    —— 传给内核的消费者名字; 排查时 `gpioinfo` 的 consumer 列
     //                    会显示它, 建议填程序名。
     //
     // 支持性: 需要 libgpiod (由 CMake 的 WITH_GPIOD 控制, 默认 AUTO)。

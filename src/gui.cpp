@@ -194,23 +194,32 @@ struct ButtonSpec {
 // Nothing —— 但字段一样要写全 (见上面 Nothing 的说明)。
 constexpr ButtonSpec kQuitButton = {"退出", true, Action::Nothing};
 
-// 底栏每行放几个按钮 (唯一的"每行几个"参数)。8 个按钮挤一行时每个只有 ~125 px,
-// 中文标签会被挤到换行/截断; 分页后每页最多 4 个, 每个约 243 px, 手指点着宽裕
-// (触摸目标建议 ≥ 48 px 见方, 高度由 btn_h 保证)。
-constexpr int kPerRow = 4;
-
-// 一个页面 = 一组底栏按钮 + 页名。加页面只改下面的表, 布局按数量自动算。
+// 一个页面 = 一组底栏按钮 + 页名 + **本页每行放几个**。
+//
+// "每行几个"是**每页各自**的参数, 不是全局常量: 首页排 3 列(好放成 2 行 × 3 列),
+// 调试页排 4 列(一行放完最宽裕)。加页面 / 改列数只动下面这张表, 布局自己算。
+//
+// 一行里每个按钮等宽(flex_grow), 所以在 1024 宽的屏上: 4 列 ≈ 243 px、3 列 ≈ 328 px
+// —— 中文标签都不会被挤到换行; 触摸目标建议 ≥ 48 px 见方, 高度由 btn_h 保证。
 struct PageSpec {
     const char *name;  // 页名: 打印到控制台, 也显示在内容区
     const ButtonSpec *buttons;
     int count;
+    int columns;  // 本页底栏每行放几个按钮
 };
 
 // 首页: 只留"进调试页"的入口 —— 6 个硬件按钮都挪进各自的调试页, 首页保持干净。
+//
+// 后面那几个 active=false 的是**占位**: 按钮画成暗描边、点了只打印"(占位, 功能待定)",
+// 用来把 2 行 × 3 列排满。有真实功能时把 active 改 true 并绑一个 Action,
+// **别忘了在 onAction() 的 switch 里补 case**(漏了 -Wswitch 会报, 这就是那道防线)。
 constexpr ButtonSpec kHomeButtons[] = {
     {"LED 调试", true, Action::LedSingleSettingPage},
     {"蜂鸣器 调试", true, Action::BuzzerSingleSettingPage},
     {"功能 8", false, Action::Nothing},
+    {"功能 A", false, Action::Nothing},
+    {"功能 B", false, Action::Nothing},
+    {"功能 C", false, Action::Nothing},
 };
 
 // LED 调试页: 单独操作 LED 的开关与心跳, 末位是返回
@@ -241,27 +250,40 @@ constexpr int countOf(const T (&)[N])
 enum class Page { Home, Led, Buzzer };
 
 constexpr PageSpec kPages[] = {
-    {"首页", kHomeButtons, countOf(kHomeButtons)},
-    {"LED 调试页", kLedButtons, countOf(kLedButtons)},
-    {"蜂鸣器调试页", kBuzzerButtons, countOf(kBuzzerButtons)},
+    {"首页", kHomeButtons, countOf(kHomeButtons), 3},  // 2 行 × 3 列
+    {"LED 调试页", kLedButtons, countOf(kLedButtons), 4},
+    {"蜂鸣器调试页", kBuzzerButtons, countOf(kBuzzerButtons), 4},
 };
 
 static_assert(static_cast<int>(Page::Home) == 0 && static_cast<int>(Page::Led) == 1 &&
                   static_cast<int>(Page::Buzzer) == 2,
               "Page 的顺序必须与 kPages 一致");
 
+// columns 会当除数用, 0 会让 rowsOf() 直接除零 —— 在编译期挡住, 别等运行期崩
+constexpr bool columnsAllValid()
+{
+    for (const PageSpec &p : kPages) {
+        if (p.columns < 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(columnsAllValid(), "kPages 里每页的 columns 必须 >= 1");
+
 // 某页要排几行; 以及所有页里最多的行数。
 // 底栏高度按"最多的那页"算, 切页时底栏高度不变, 内容区不会上下跳。
-constexpr int rowsOf(int count)
+constexpr int rowsOf(int count, int columns)
 {
-    return (count + kPerRow - 1) / kPerRow;
+    return (count + columns - 1) / columns;
 }
 
 constexpr int maxRows()
 {
     int m = 1;
     for (const PageSpec &p : kPages) {
-        const int r = rowsOf(p.count);
+        const int r = rowsOf(p.count, p.columns);
         if (r > m) {
             m = r;
         }
@@ -617,7 +639,7 @@ void buildContent(lv_obj_t *scr, int win_w, int top, int h)
 // 切页时底栏高度不变, 内容区不会上下跳。
 //
 // 外层竖直 flex、每行横向 flex 均分 —— 加按钮只改页表, 布局自动重排,
-// kPerRow 是唯一的"每行几个"参数。返回底栏高度, 供 buildUi 算内容区。
+// "每行几个"取自本页的 PageSpec::columns。返回底栏高度, 供 buildUi 算内容区。
 int buildFooter(lv_obj_t *scr, int win_w, int btn_h, int margin)
 {
     const int row_gap = btn_h / 3;  // 行间距, 随按钮高度缩放
@@ -629,14 +651,18 @@ int buildFooter(lv_obj_t *scr, int win_w, int btn_h, int margin)
     lv_obj_set_style_pad_row(bar, row_gap, 0);
     // createBar 默认是横向 flex, 这里要竖直排行
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN,
+    // 主轴(main place)用 CENTER, 不是 SPACE_BETWEEN: 首页 2 行时正好排满(无差别),
+    // 而只有 1 行的调试页会在空出来的高度里**垂直居中** —— 按钮不会全挤在分隔线
+    // 下面、底下拖一条空带。代价: 切到调试页时那一行比首页第 1 行低约半行。
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     g_footer_bar = bar;
     return bar_h;
 }
 
 // 按当前页 (g_page) 重建底栏按钮: 初始化和每次切页都走这里。
-// 尺寸不用重算 —— 底栏高度已由 buildFooter 按 maxRows() 固定。
+// 尺寸不用重算 —— 底栏高度已由 buildFooter 按 maxRows() 固定;
+// 本页每行放几个由 PageSpec::columns 决定。
 void buildPageButtons()
 {
     if (g_footer_bar == nullptr) {
@@ -646,7 +672,7 @@ void buildPageButtons()
 
     const PageSpec &page = kPages[static_cast<int>(g_page)];
     const int grid_w = g_win_w - 2 * g_margin;
-    const int rows = rowsOf(page.count);
+    const int rows = rowsOf(page.count, page.columns);
 
     for (int r = 0; r < rows; r++) {
         lv_obj_t *row = createPane(g_footer_bar);
@@ -656,13 +682,20 @@ void buildPageButtons()
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_column(row, g_margin, 0);
 
-        // 本轮要放的表项: 每行 kPerRow 个, 最后一行可能不满
-        const int first = r * kPerRow;
-        const int last = (first + kPerRow < page.count) ? (first + kPerRow) : page.count;
-        for (int i = first; i < last; i++) {
-            lv_obj_t *btn = createButton(row, page.buttons[i], onAction);
-            lv_obj_set_height(btn, g_btn_h);
-            lv_obj_set_flex_grow(btn, 1);
+        // 本行的槽位固定是 columns 个: 末行不满时补**透明占位**, 让已有的按钮
+        // 保持等宽。不补的话 flex_grow 会把末行 2 个按钮撑成半屏宽, 和上一行
+        // 对不齐(就是待办里"两行宽度不等"那个老问题)。
+        const int first = r * page.columns;
+        for (int i = first; i < first + page.columns; i++) {
+            if (i < page.count) {
+                lv_obj_t *btn = createButton(row, page.buttons[i], onAction);
+                lv_obj_set_height(btn, g_btn_h);
+                lv_obj_set_flex_grow(btn, 1);
+            } else {
+                lv_obj_t *slot = createPane(row);  // 透明占位: 只占宽度, 不显示
+                lv_obj_set_height(slot, g_btn_h);
+                lv_obj_set_flex_grow(slot, 1);
+            }
         }
     }
     refreshPageLabel();
@@ -679,13 +712,15 @@ void buildUi(int win_w, int win_h)
     g_win_w = win_w;
     g_margin = pct(win_w, 1);
 
-    // 触摸屏上按钮不能太小 (手指触点约 40~50 px): 取屏高 9%, 限制 36..64
-    g_btn_h = pct(win_h, 9);
-    if (g_btn_h < 36) {
-        g_btn_h = 36;
+    // 底栏按钮高度。触摸屏上手指触点约 40~50 px, 原来取屏高 9%(1024x600 上 54 px)
+    // —— 实测**手感偏紧, 不好按**, 所以提到 13%: 同一块屏上是 78 px(高了 44%)。
+    // 上下限挡住极端窗口尺寸: 最小 48(再小就真的难按), 最大 96(再高会把内容区挤没)。
+    g_btn_h = pct(win_h, 13);
+    if (g_btn_h < 48) {
+        g_btn_h = 48;
     }
-    if (g_btn_h > 64) {
-        g_btn_h = 64;
+    if (g_btn_h > 96) {
+        g_btn_h = 96;
     }
 
     const int header_h = pct(win_h, 11);

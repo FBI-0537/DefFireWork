@@ -592,10 +592,18 @@ SUBSYSTEM=="gpio", KERNEL=="gpiochip*", ACTION=="add", RUN+="/bin/chgrp gpio /de
 udevadm info -q property /dev/gpiochip0 | grep SUBSYSTEM   # 应当输出 gpio
 ```
 
-**这个坑目前不挡任何功能**：LED / 蜂鸣器走的是 D-8 那条 sysfs 路线，完全不碰
-gpiochip。`gpio_read_value()` 虽然被链进产物（连 `libgpiod.so.2` 一起带进来），
-但**当前没有任何调用点** —— 详见 [workflow.md](workflow.md) §2.3。等真正开始写
-传感器模块时，这条权限才会用上；提前配好没有副作用。
+**板上验证（2026-09-19）**：照本节配好之后，`gpiodetect` / `gpioinfo` **不需要 sudo**
+就能列出 9 个控制器（label 分别是 `GPIOA` … `GPIOI`）—— 规则命中了。
+
+顺带把 D-8 那两条线的物理位置也确认了：`sys-led` = **GPIOI:3**、`beep` = **GPIOF:8**，
+`gpioinfo` 里 consumer 显示的就是 `"sys-led"` / `"beep"`、状态 `[used]` —— 所以它们
+**确实**不能用 libgpiod 去 request（EBUSY），继续走 D-8 的 sysfs 路线是对的。
+（两者 DT 极性都是 active-low，但不影响 sysfs：`brightness=1` 就是"亮 / 响"。）
+
+**谁在用这条权限**：`useable_tools::gpio_read_value()` 现在**有调用点了** ——
+`src/start.cpp` 的传感器接线表 `kGpioInputs` 通过它读开关量输入。接线表目前是空的
+（板上到底接了哪些传感器还没确认），所以这条权限是传感器模块上板验证的**前置条件**，
+不再是"提前配好、暂时没用"。详见 [workflow.md](workflow.md) §2.3（那张线上表也在那里）。
 
 ---
 

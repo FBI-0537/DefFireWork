@@ -127,6 +127,10 @@ libgpiod。**现在没做** —— 板子无论如何都要装 `libgpiod2`（GUI
 3. **加页面 / 加按钮只改表**：`kHomeButtons` / `kLedButtons` / `kBuzzerButtons` + `kPages`。
    数组长度用 `countOf()` 取，**不要手写数字** —— 手写的 `kNumButtons` 和表对不上，
    已经坏过一次（越界初始化）。
+   **"每行放几个"是每页自己的参数**（`PageSpec::columns`，首页 3 列、调试页 4 列），
+   不再是全局常量；行数由 `rowsOf(count, columns)` 算。末行不满时 `buildPageButtons()`
+   会补**透明占位**，让各行按钮等宽（不补的话 `flex_grow` 会把末行少量按钮撑成半屏宽）。
+   `columns` 必须 ≥ 1（有 `static_assert` 挡住除零）。
 4. **`Page` 枚举的顺序必须与 `kPages` 一致**（有 `static_assert` 兜着）。
 5. **切页只置 `g_page_dirty`，重建在主循环里做。** 不要在事件回调里删掉正在派发的那个
    按钮所在的底栏。

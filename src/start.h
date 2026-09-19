@@ -48,4 +48,8 @@ int buzzer_onboard_clear_heartbeat();
 // 不在这里返回 —— 所以控制台那行才是权威, 界面上显示"已开"只是"请求已发"。
 int buzzer_out_set(bool on);
 
+// 收尾: 停声、把 PA6 还给系统、并结束发声线程(join —— 不是丢一个 detached 野线程)。
+// 界面退出前调一次; 之后再 buzzer_out_set(true) 仍可重新起来。
+void buzzer_out_shutdown();
+
 #endif

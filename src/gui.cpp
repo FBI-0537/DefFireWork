@@ -954,6 +954,11 @@ int main(int argc, char **argv)
     }
 
     std::printf("退出\n");
+
+    // 收尾: 停蜂鸣器 + 把 PA6 还回去 + join 发声线程 —— 在销毁显示/字体之前做,
+    // 免得线程还在往 GPIO 写的时候进程被拆掉。
+    buzzer_out_shutdown();
+
     if (g_disp != nullptr) {
         lv_display_delete(g_disp);  // 关 X 窗口, 停掉 tick 线程
     }

@@ -345,6 +345,9 @@ constexpr const char *kOutBuzzerConsumer = "out_buzzer";
 // 开关标志: GUI 的按钮回调写, 蜂鸣器线程读 —— 跨线程, 所以用 atomic
 std::atomic<bool> g_out_buzzer_on {false};
 std::atomic<bool> g_out_buzzer_thread_started {false};
+std::atomic<bool> g_out_buzzer_quit {false};  // 让线程收尾退出(见 buzzer_out_shutdown)
+pthread_t g_out_buzzer_tid {};
+bool g_out_buzzer_tid_valid = false;  // 只有主线程碰这几个, 不需要 atomic
 
 // 频率: 环境变量可覆盖, 只在起线程时解析一次
 uint32_t out_buzzer_hz()
@@ -393,6 +396,18 @@ void *buzzer_out_thread(void *)
     clock_gettime(CLOCK_MONOTONIC, &deadline);
 
     for (;;) {
+        if (g_out_buzzer_quit.load()) {
+            // 收尾: 先静音, 再把线还回去 —— 进程退出时把 PA6 留在"我们申请着"的
+            // 状态不好: 别的程序(或下一次运行)想用这条线会拿到 EBUSY。
+            if (out != nullptr) {
+                useable_tools::gpio_output_set(out, 0);
+                useable_tools::gpio_output_close(out);
+                std::fprintf(stderr, "外部无源蜂鸣器: 已停止并释放 %s:%u\n", kOutBuzzerChip,
+                             kOutBuzzerLine);
+            }
+            return nullptr;
+        }
+
         if (!g_out_buzzer_on.load()) {
             // 停: 只在"之前还在响"时收一次低电平, 之后每轮几乎不做事
             if (out != nullptr && level) {
@@ -435,13 +450,28 @@ int buzzer_out_set(bool on)
 
     // 第一次"要响"时才起线程: 没人用蜂鸣器就不该多一个常驻线程
     if (on && !g_out_buzzer_thread_started.exchange(true)) {
-        pthread_t tid;
-        if (pthread_create(&tid, nullptr, buzzer_out_thread, nullptr) != 0) {
+        if (pthread_create(&g_out_buzzer_tid, nullptr, buzzer_out_thread, nullptr) != 0) {
             g_out_buzzer_thread_started.store(false);
             std::fprintf(stderr, "外部无源蜂鸣器: 创建线程失败\n");
             return -1;
         }
-        pthread_detach(tid);  // 常驻线程, 不 join
+        g_out_buzzer_tid_valid = true;  // 不 detach: 退出时要 join, 见 buzzer_out_shutdown
     }
     return 0;
+}
+
+void buzzer_out_shutdown()
+{
+    if (!g_out_buzzer_tid_valid) {
+        return;  // 一次都没响过, 没有线程要收
+    }
+
+    g_out_buzzer_on.store(false);
+    g_out_buzzer_quit.store(true);
+    // 线程最长 5 ms 醒一次(关着时的轮询间隔), 所以这里 join 很快返回
+    pthread_join(g_out_buzzer_tid, nullptr);
+
+    g_out_buzzer_tid_valid = false;
+    g_out_buzzer_thread_started.store(false);  // 收尾之后还能再开
+    g_out_buzzer_quit.store(false);
 }

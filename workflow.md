@@ -133,6 +133,11 @@ FIRECONTROL_BUZZER_HZ=3000 DISPLAY=:0 ./deffire-gui-dev     # 100..8000，超范
 想要**零 CPU**、更准的音调仍可走内核 PWM（`/sys/class/pwm`），但那要把 PA6 复用成 PWM
 通道并上板验证 —— 当前先用 GPIO + 线程这套。
 
+**收尾**：界面退出前调 `buzzer_out_shutdown()` —— 停声、把 PA6 还给系统、并
+`pthread_join` 掉发声线程（不是丢一个 detached 野线程在那儿）；之后再
+`buzzer_out_set(true)` 仍能重新起来。用一个小测试程序验证过：两次开关都能 join + 释放、
+退出码 0。
+
 **还没实测**：板上那个蜂鸣器"能响"已确认，但**最响的频率**没试过（用上面的环境变量扫一遍）。
 
 **一个副作用（知道就好，暂时不用管）**：`gpio_read_value()` 与 `write_File()` 在同一个
@@ -186,3 +191,20 @@ libgpiod。**现在没做** —— 板子无论如何都要装 `libgpiod2`（GUI
   蜂鸣器走 `EV_SND`），**不是手上这块底板**（1 个 LED + 1 个蜂鸣器，都在
   `/sys/class/leds/` 下）；那份 PDF 讲的是出厂 Buildroot 系统，指令不能直接搬到 Debian。
   IIO 的 `iio:deviceN` 编号是动态分配的，**别写死**。
+
+### 4.1 PR 处理记录（2026-09-19）
+
+| PR | 状态 | 说明 |
+|---|---|---|
+| #7 | ✅ 已合并 | 权限脚本覆盖 `/dev/gpiochip*`（建 `gpio` 组 + 第二条 udev 规则）；板上 `gpiodetect` 已不再 Permission denied |
+| #8 | ✅ 已合并 | 外部无源蜂鸣器入口 + 独立调试页（merge `c725907`）。合并后我在 main 上补了两个提交：`67a83a9` 修实现（line 只 request 一次 + 真方波）、`2966915` 把发声移到**专用线程**（默认 2 kHz、`FIRECONTROL_BUZZER_HZ` 可调） |
+| #9 | ❌ 决定关闭 | 想把发声回退成"每轮一个脉冲 + `delay_us(500)`"：与 main **全面冲突**（基于 `67a83a9`），而且它针对的"音调低"已由 `2966915` 解决；回退会带回 1 kHz 上限、每轮阻塞 1 ms、每轮 2 次芯片开关。**待有人在网页上点 Close** |
+
+**工具限制**：本机没装 `gh`，也没有 GitHub token —— 仓库是公开的，所以**读**（列 PR/issue、
+看 diff、读正文）走 GitHub API 免认证即可；但**评论、关闭、点 Merge 按钮**都要在网页上做。
+合并可以走 `git fetch origin pull/N/head:pr-N` + 本地 merge + `git push`：GitHub 会认作
+已合并（#7/#8 都是这么合的，`merged=True`）。
+
+**流程教训（犯过一次）**：用户说"整合 PR"时，我先去改代码、**没有重新拉一次开放 PR 列表**
+—— 结果漏掉了在改代码期间新开的 #9。**以后再动手前先 `git fetch --all --prune` 并把开放
+PR/issue 列一遍**，动手前和推送前各查一次。

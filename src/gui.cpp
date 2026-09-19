@@ -179,9 +179,12 @@ enum class Action {
     BuzzerOn,
     BuzzerOff,
     BuzzerHeartbeat,
-    LedSingleSettingPage,     // 首页 → LED 调试页
-    BuzzerSingleSettingPage,  // 首页 → 蜂鸣器调试页
-    BackToHome,               // 调试页 → 首页
+    OutBuzzerOn,   // 外部无源蜂鸣器 (GPIOA:6): 只置标志, 脉冲由主循环发
+    OutBuzzerOff,
+    LedSingleSettingPage,        // 首页 → LED 调试页
+    BuzzerSingleSettingPage,     // 首页 → 蜂鸣器调试页
+    OutBuzzerSingleSettingPage,  // 首页 → 外部无源蜂鸣器调试页
+    BackToHome,                  // 调试页 → 首页
 };
 
 struct ButtonSpec {
@@ -208,15 +211,16 @@ struct PageSpec {
     int columns;  // 本页底栏每行放几个按钮
 };
 
-// 首页: 只留"进调试页"的入口 —— 6 个硬件按钮都挪进各自的调试页, 首页保持干净。
+// 首页: 只留"进调试页"的入口 —— 硬件按钮都挪进各自的调试页, 首页保持干净。
 //
 // 后面那几个 active=false 的是**占位**: 按钮画成暗描边、点了只打印"(占位, 功能待定)",
 // 用来把 2 行 × 3 列排满。有真实功能时把 active 改 true 并绑一个 Action,
 // **别忘了在 onAction() 的 switch 里补 case**(漏了 -Wswitch 会报, 这就是那道防线)。
+// 【外部无源蜂鸣器】就是顶掉原来"功能 8"那一格 —— 格数不变, 首页仍是 2 行 × 3 列。
 constexpr ButtonSpec kHomeButtons[] = {
     {"LED 调试", true, Action::LedSingleSettingPage},
     {"蜂鸣器 调试", true, Action::BuzzerSingleSettingPage},
-    {"功能 8", false, Action::Nothing},
+    {"外部无源蜂鸣器", true, Action::OutBuzzerSingleSettingPage},
     {"功能 A", false, Action::Nothing},
     {"功能 B", false, Action::Nothing},
     {"功能 C", false, Action::Nothing},
@@ -238,6 +242,17 @@ constexpr ButtonSpec kBuzzerButtons[] = {
     {"返回", true, Action::BackToHome},
 };
 
+// 外部无源蜂鸣器调试页: 接在 GPIOA:6 上的无源蜂鸣器。
+//
+// 和上面那一页的区别: 走 libgpiod 手动写电平, **不归内核 leds-gpio 管**,
+// 所以它没有 trigger 文件 —— 这页里**没有"心跳"按钮**, 板载那个的"心跳"是
+// 内核 LED 框架的功能, 外部这个没有对应的东西 (开/关就是全部动作)。
+constexpr ButtonSpec kOutBuzzerButtons[] = {
+    {"外部蜂鸣器 开", true, Action::OutBuzzerOn},
+    {"外部蜂鸣器 关", true, Action::OutBuzzerOff},
+    {"返回", true, Action::BackToHome},
+};
+
 // 数组长度在编译期取出来 —— 原来 kNumButtons 是手写的数字, 往表里加一项忘了改
 // 就变成越界初始化 (这次就是这么坏的)。
 template <typename T, int N>
@@ -247,16 +262,18 @@ constexpr int countOf(const T (&)[N])
 }
 
 // 当前显示哪一页。顺序必须与 kPages 一致, 见下面的 static_assert。
-enum class Page { Home, Led, Buzzer };
+enum class Page { Home, Led, Buzzer, OutBuzzer };
 
 constexpr PageSpec kPages[] = {
     {"首页", kHomeButtons, countOf(kHomeButtons), 3},  // 2 行 × 3 列
     {"LED 调试页", kLedButtons, countOf(kLedButtons), 4},
     {"蜂鸣器调试页", kBuzzerButtons, countOf(kBuzzerButtons), 4},
+    {"外部无源蜂鸣器调试页", kOutBuzzerButtons, countOf(kOutBuzzerButtons), 3},
 };
 
 static_assert(static_cast<int>(Page::Home) == 0 && static_cast<int>(Page::Led) == 1 &&
-                  static_cast<int>(Page::Buzzer) == 2,
+                  static_cast<int>(Page::Buzzer) == 2 &&
+                  static_cast<int>(Page::OutBuzzer) == 3,
               "Page 的顺序必须与 kPages 一致");
 
 // columns 会当除数用, 0 会让 rowsOf() 直接除零 —— 在编译期挡住, 别等运行期崩
@@ -407,6 +424,17 @@ void onAction(lv_event_t *e)
         outcome = buzzer_onboard_set_heartbeat() == 0 ? "蜂鸣器心跳已开启"
                                                       : "失败 (开发机无此设备)";
         break;
+    // 外部无源蜂鸣器: **只置标志**, 真正的脉冲在主循环里发 (buzzer_set_beep())。
+    // 不能在这里"响一下"就算完 —— 按钮回调返回之后蜂鸣器不会自己保持,
+    // 一次 1 µs 的脉冲听不见东西。
+    case Action::OutBuzzerOn:
+        out_buzzer_status = true;
+        outcome = "外部无源蜂鸣器已开";
+        break;
+    case Action::OutBuzzerOff:
+        out_buzzer_status = false;
+        outcome = "外部无源蜂鸣器已停";
+        break;
     case Action::Nothing:
         outcome = "(占位, 功能待定)";
         break;
@@ -423,6 +451,12 @@ void onAction(lv_event_t *e)
         g_page_dirty = true;
         page_switch = true;
         outcome = "进入蜂鸣器调试页";
+        break;
+    case Action::OutBuzzerSingleSettingPage:
+        g_page = Page::OutBuzzer;
+        g_page_dirty = true;
+        page_switch = true;
+        outcome = "进入外部无源蜂鸣器调试页";
         break;
     case Action::BackToHome:
         g_page = Page::Home;
@@ -887,14 +921,20 @@ int main(int argc, char **argv)
                 countOf(kPages), kPages[static_cast<int>(Page::Home)].count);
     std::printf("\n交互:\n");
     std::printf("  点右上角【退出】   退出程序\n");
-    std::printf("  首页点【LED 调试】/【蜂鸣器 调试】  进对应调试页, 页内末位【返回】回首页\n");
-    std::printf("  调试页里点按钮     单独控制板载 LED / 蜂鸣器 (未绑定的打印占位提示)\n");
+    std::printf("  首页点【LED 调试】/【蜂鸣器 调试】/【外部无源蜂鸣器】 进对应调试页,\n");
+    std::printf("                    页内末位【返回】回首页\n");
+    std::printf("  调试页里点按钮     单独控制板载 LED / 蜂鸣器 / 外部无源蜂鸣器\n");
     std::printf("  按 q / Esc        退出程序 (每一页都一样)\n");
     std::fflush(stdout);
 
     g_start_tick = lv_tick_get();
 
     while (!g_quit) {
+        // 外部无源蜂鸣器: 开关标志在 onAction() 里改, 这里每轮发一次脉冲。
+        // buzzer_set_beep() 自己读 out_buzzer_status —— 关着就立刻返回, 没开销;
+        // 板上没接这个蜂鸣器时它会返回 -1, 不影响循环。
+        buzzer_set_beep();
+
         // 切页在这里落地: 事件回调只置标志, 避免在派发点击的过程中删掉底栏
         // (见 g_page_dirty 的说明)。重建完刷新内容区那行小字。
         if (g_page_dirty) {

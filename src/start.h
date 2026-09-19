@@ -38,4 +38,13 @@ int buzzer_onboard_set_heartbeat();
 int led_onboard_clear_heartbeat();
 int buzzer_onboard_clear_heartbeat();
 
+// 外部无源蜂鸣器 (接在 GPIOA:6) 的开关状态: true = 要响, false = 停。
+// GUI 的按钮回调设置它 (gui.cpp), buzzer_set_beep() 读取它 (start.cpp),
+// 所以必须是全局的、两个文件都看得见 —— 早先写成 main() 里的局部变量,
+// 结果两边都报 not declared。
+extern bool out_buzzer_status;
+
+// 让外部无源蜂鸣器响一下。状态由 out_buzzer_status 控制 (见上)。
+int buzzer_set_beep();
+
 #endif

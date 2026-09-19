@@ -1,6 +1,7 @@
 #include "usetools.h"
 
 #include <cstdio>
+#include <unistd.h>
 
 // libgpiod 是可选的 (CMake 的 WITH_GPIOD, 默认 AUTO): 开发机上没装
 // libgpiod-devel 时整个项目仍然要能编。所以头文件和实现都跟着这个宏走 ——
@@ -102,6 +103,54 @@ int gpio_read_value(const char *chip_label, unsigned int line_offset, const char
     return value;
 }
 
+int gpio_write_value(const char *chip_label, unsigned int line_offset,
+                     const char *consumer, int value) {
+    struct gpiod_chip *chip = nullptr;
+    struct gpiod_line *line = nullptr;
+
+    if (chip_label == nullptr || consumer == nullptr) {
+        return -1;
+    }
+
+    if (value != 0 && value != 1) {
+        fprintf(stderr, "gpio_write_value: value must be 0 or 1\n");
+        return -1;
+    }
+
+    chip = gpiod_chip_open_by_label(chip_label);
+    if (!chip) {
+        perror("gpiod_chip_open_by_label");
+        return -1;
+    }
+
+    line = gpiod_chip_get_line(chip, line_offset);
+    if (!line) {
+        perror("gpiod_chip_get_line");
+        gpiod_chip_close(chip);
+        return -1;
+    }
+
+    // 请求为输出，先给一个默认值 0
+    if (gpiod_line_request_output(line, consumer, 0) < 0) {
+        perror("gpiod_line_request_output");
+        gpiod_chip_close(chip);   // 未成功 request，不要 release
+        return -1;
+    }
+
+    // 写入指定电平
+    if (gpiod_line_set_value(line, value) < 0) {
+        perror("gpiod_line_set_value");
+        gpiod_line_release(line);
+        gpiod_chip_close(chip);
+        return -1;
+    }
+
+    gpiod_line_release(line);
+    gpiod_chip_close(chip);
+
+    return 0;
+}
+
 #else  // 没编入 libgpiod: 保留同名函数, 但显式失败 —— 不静默返回"低电平"
 
 int gpio_read_value(const char *chip_label, unsigned int line_offset, const char *consumer) {
@@ -115,6 +164,24 @@ int gpio_read_value(const char *chip_label, unsigned int line_offset, const char
         warned = true;
         std::fprintf(stderr,
                      "gpio_read_value: 本产物没有编入 libgpiod 支持 (CMake 的 WITH_GPIOD) "
+                     "—— 返回 -1。装上 libgpiod-devel 后重新配置即可。\n");
+    }
+    return -1;
+}
+
+int gpio_write_value(const char *chip_label, unsigned int line_offset,
+                     const char *consumer, int value) {
+    (void)chip_label;
+    (void)line_offset;
+    (void)consumer;
+    (void)value;
+
+    // 只提示一次: 写 GPIO 可能被频繁调用, 每次都打印会把 stderr 刷爆
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        std::fprintf(stderr,
+                     "gpio_write_value: 本产物没有编入 libgpiod 支持 (CMake 的 WITH_GPIOD) "
                      "—— 返回 -1。装上 libgpiod-devel 后重新配置即可。\n");
     }
     return -1;
